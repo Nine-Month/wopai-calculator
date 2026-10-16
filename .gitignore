@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Build / dist (do not push huge EXE trees)
+dist/
+build/work/
+*.spec.bak
+
+# Runtime / local
+logs/
+settings.json
+data/last_*.json
+*.log
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+_sync_in/
+_sync_in2/
+*.b64z
+build_log*.txt
+_agent_write_test.txt
+_UI_BATCH_READY.txt
+pfh-repair-sync.tgz

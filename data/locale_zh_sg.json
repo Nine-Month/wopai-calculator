@@ -1,0 +1,108 @@
+{
+  "cards": {
+    "card_1": "Helldiver俯冲轰炸机 USS埃塞克斯",
+    "card_10": "USS科罗拉多",
+    "card_11": "HMS反击",
+    "card_12": "USS新墨西哥",
+    "card_13": "USS阿拉斯加",
+    "card_14": "USS巴尔的摩",
+    "card_15": "USS克利夫兰",
+    "card_16": "USS圣地亚哥",
+    "card_17": "USS新奥尔良",
+    "card_18": "HMAS霍巴特",
+    "card_19": "USS马布尔黑德",
+    "card_2": "Corsair战斗机 USS埃塞克斯",
+    "card_20": "Hr.Ms.德·鲁伊特",
+    "card_21": "USS拉菲",
+    "card_22": "USS约翰斯顿",
+    "card_23": "USS基德",
+    "card_24": "USS本森",
+    "card_25": "凯旋",
+    "card_26": "USS休斯",
+    "card_27": "USS法拉格特",
+    "card_28": "HMS箭",
+    "card_29": "USS约翰·D.·福特",
+    "card_3": "Avenger鱼雷轰炸机 USS企业",
+    "card_30": "HMAS吸血鬼",
+    "card_4": "Hellcat战斗机 USS企业",
+    "card_5": "Dauntless俯冲轰炸机 USS萨拉托加",
+    "card_6": "Wildcat战斗机 USS萨拉托加",
+    "card_7": "USS密苏里",
+    "card_8": "USS北卡罗来纳",
+    "card_9": "HMS英王乔治五世"
+  },
+  "enemies": {
+    "vehicle_1": "“Val”俯冲轰炸机",
+    "vehicle_10": "吹雪级",
+    "vehicle_11": "峰风级",
+    "vehicle_12": "岸防炮",
+    "vehicle_13": "防空炮阵地",
+    "vehicle_14": "乙型潜艇",
+    "vehicle_15": "漂雷",
+    "vehicle_2": "“Kate”鱼雷轰炸机",
+    "vehicle_3": "“零式”战斗机",
+    "vehicle_4": "长门级",
+    "vehicle_5": "金刚级",
+    "vehicle_6": "最上级",
+    "vehicle_7": "妙高级",
+    "vehicle_8": "球磨级",
+    "vehicle_9": "阳炎级",
+    "boss_1": "大和",
+    "boss_2": "武藏",
+    "boss_3": "东京快车旗舰",
+    "boss_4": "加贺",
+    "boss_5": "海岸堡垒",
+    "boss_6": "比叡",
+    "boss_7": "熊野",
+    "boss_8": "羽黑"
+  },
+  "modifiers": {
+    "gunners-training": {
+      "title": "炮术训练",
+      "description": "火力"
+    },
+    "damage-control-training": {
+      "title": "伤害控制训练",
+      "description": "存活性"
+    },
+    "rudder-crew-training": {
+      "title": "方向舵操作训练",
+      "description": "机动性"
+    },
+    "teamwork": {
+      "title": "团队合作",
+      "description": "增益效果"
+    },
+    "focused": {
+      "title": "心无旁骛",
+      "description": "停用所有增益与减益效果，并提升您单位的所有参数。"
+    },
+    "specialization": {
+      "title": "特化训练",
+      "description": "减益效果"
+    },
+    "sea-dog": {
+      "title": "老水手",
+      "description": "即使减益效果未对应敌方单位的弱点，也能发挥作用。"
+    },
+    "fast-repair": {
+      "title": "快速维修",
+      "description": "恢复生命值。"
+    },
+    "unstoppable": {
+      "title": "势不可挡",
+      "description": "无视关键据点中影响己方单位参数、增益与减益效果的战斗条件。"
+    },
+    "effectiveness": {
+      "title": "效率提升",
+      "description": "进度代币"
+    },
+    "moral-impact": {
+      "title": "士气打击",
+      "description": "若击败受影响的敌方单位，则在当前阶段目标和移除战斗条件的计数中，会按击败两个敌方单位计算。"
+    }
+  },
+  "strings": {
+    "IDS_BONUS_PERCENT_POSITIVE": "+%(amount)s%"
+  }
+}
