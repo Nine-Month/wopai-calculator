@@ -21,3 +21,12 @@
 ## 版本
 
 Ver 1.0.0
+
+
+## 许可证
+
+Copyright (C) 2026 Nine-Month / 玖月
+
+本项目以 **GNU General Public License v3.0**（GPL-3.0）授权，完整条款见 [LICENSE](LICENSE)。
+
+游戏素材与相关材料仍受其各自版权约束，不在本许可证覆盖范围内。
