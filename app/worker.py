@@ -12,7 +12,7 @@ from typing import Any
 from PySide6.QtCore import QObject, QThread, Signal
 
 from core import scrape, solver
-from core.solver import filter_pool
+from core.solver import filter_pool, lane_win_pct
 from core.items_solve import (
     collect_boss_seeds,
     health_factor_from_meta,
@@ -102,21 +102,6 @@ def merge_locale_maps(*blobs: dict | None) -> dict:
     return out
 
 
-def lane_win_pct(lo: float, hi: float, enemy: float) -> float:
-    """Win chance if my power ~ Uniform[lo, hi] and enemy is fixed."""
-    try:
-        lo, hi, enemy = float(lo), float(hi), float(enemy)
-    except Exception:
-        return 0.0
-    if hi <= lo:
-        return 100.0 if enemy < lo else (100.0 if enemy <= lo else 0.0)
-    if enemy <= lo:
-        return 100.0
-    if enemy >= hi:
-        return 0.0
-    return (hi - enemy) / (hi - lo) * 100.0
-
-
 def resolve_display_name(code_or_name: str | None, table: dict[str, str]) -> str:
     if not code_or_name:
         return "?"
@@ -187,12 +172,17 @@ def normalize_solution(sol: dict, mode: str, locale: dict | None = None) -> dict
     cards = loc.get("cards") or {}
     enemies = loc.get("enemies") or {}
 
-    win_pcts: list[float] = []
-    # Lowest-win lane among the four cards (internal; not shown in UI summary)
+    # 综合 = 四路胜率加总/4（空位按 0%）；最低 = 已放牌中最低一路
+    four_pcts: list[float] = [0.0, 0.0, 0.0, 0.0]
+    filled_pcts: list[float] = []
     min_lane_ship: str | None = None
     min_lane_wp: float | None = None
-    # Fill mods / names / per-lane win% onto slots
-    for i, slot in enumerate(out.get("slots") or []):
+    slots = list(out.get("slots") or [])
+    while len(slots) < 4:
+        slots.append({"status": "empty"})
+    out["slots"] = slots
+
+    for i, slot in enumerate(slots):
         if "mods" not in slot:
             mods = []
             if i < len(out["lane_mods"]):
@@ -201,6 +191,8 @@ def normalize_solution(sol: dict, mode: str, locale: dict | None = None) -> dict
         slot["mods_zh"] = mods_label(slot.get("mods"))
 
         if slot.get("status") == "empty":
+            if i < 4:
+                four_pcts[i] = 0.0
             continue
 
         code = slot.get("ship_code") or slot.get("code")
@@ -208,7 +200,6 @@ def normalize_solution(sol: dict, mode: str, locale: dict | None = None) -> dict
             slot["ship_code"] = code
             slot["ship"] = resolve_display_name(code, cards)
         else:
-            # name may still be a raw code
             slot["ship"] = resolve_display_name(slot.get("ship"), cards)
 
         enemy_code = slot.get("enemy_code")
@@ -223,17 +214,18 @@ def normalize_solution(sol: dict, mode: str, locale: dict | None = None) -> dict
         hi = float(band[1]) if len(band) > 1 else lo
         wp = lane_win_pct(lo, hi, ep)
         slot["win_pct"] = round(wp, 1)
-        win_pcts.append(wp)
+        if i < 4:
+            four_pcts[i] = wp
+        filled_pcts.append(wp)
         if min_lane_wp is None or wp < min_lane_wp:
             min_lane_wp = wp
             min_lane_ship = str(slot.get("ship") or "?")
 
-    if win_pcts:
-        out["win_rate_avg"] = round(sum(win_pcts) / len(win_pcts), 1)
-        out["win_rate_min"] = round(min(win_pcts), 1)
+    out["win_rate_avg"] = round(sum(four_pcts) / 4.0, 1)
+    if filled_pcts:
+        out["win_rate_min"] = round(min(filled_pcts), 1)
         out["win_rate_min_ship"] = min_lane_ship or ""
     else:
-        out["win_rate_avg"] = 0.0
         out["win_rate_min"] = 0.0
         out["win_rate_min_ship"] = ""
 

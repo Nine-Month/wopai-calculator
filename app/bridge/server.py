@@ -23,6 +23,7 @@ class BridgeSignals(QObject):
     snapshot_received = Signal(dict)
     deploy_result = Signal(dict)
     deploy_plan = Signal(dict)
+    auto_result = Signal(dict)
     status = Signal(str)
     error = Signal(str)
 
@@ -75,13 +76,45 @@ class BridgeServer:
         return self._broadcast({"type": "scrape"})
 
     def request_deploy(self, slots: list[dict | None], *, clear: bool = True) -> bool:
-        """Ask page to place ships via Redux battleBoard (type=deploy)."""
+        """Ask page to place ships via Redux battleBoard (type=deploy).
+
+        Does not start a battle. Automation uses request_start_battle separately.
+        """
         payload = {
             "type": "deploy",
             "slots": slots,
             "clear": clear,
         }
         return self._broadcast(payload)
+
+    def request_open_keypoint(self, operation_id: str, keypoint_id: str) -> bool:
+        return self._broadcast({
+            "type": "open_keypoint",
+            "operationId": operation_id,
+            "keypointId": keypoint_id,
+        })
+
+    def request_start_battle(self) -> bool:
+        """Automation only: ask the page to click 「战斗」. Not used by manual deploy."""
+        return self._broadcast({"type": "start_battle"})
+
+    def request_open_operation(self, operation_id: str) -> bool:
+        """SPA-navigate into one operation from the hall. Does not reload the page."""
+        return self._broadcast({
+            "type": "open_operation",
+            "operationId": operation_id,
+        })
+
+    def request_return_lobby(self) -> bool:
+        """SPA-navigate back to /operations. Does not reload the page."""
+        return self._broadcast({"type": "return_lobby"})
+
+    def request_fetch_operation(self, operation_id: str) -> bool:
+        """Read-only GET of one operation. Does not spend currency or change settings."""
+        return self._broadcast({
+            "type": "fetch_operation",
+            "operationId": operation_id,
+        })
 
     def inject_script_text(self) -> str:
         path = resource_path("bridge", "inject.js")
@@ -264,6 +297,8 @@ class BridgeServer:
             self.signals.deploy_plan.emit(data)
         elif typ == "deploy_result":
             self.signals.deploy_result.emit(data)
+        elif typ == "auto_result":
+            self.signals.auto_result.emit(data)
         elif typ == "log":
             self.signals.status.emit(str(data.get("message") or data))
         elif typ == "error":

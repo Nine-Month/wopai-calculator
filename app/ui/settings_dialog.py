@@ -4,6 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal, QUrl, QTimer
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut, QIntValidator
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFormLayout,
     QHBoxLayout,
@@ -137,6 +138,19 @@ class SettingsDialog(QDialog):
         port_label.setObjectName("SettingsLabel")
         form.addRow(port_label, self.port_edit)
 
+        self.chk_open_tip = QCheckBox("显示软件使用提示")
+        self.chk_open_tip.setChecked(bool(settings.show_open_tip))
+        self.chk_open_tip.setToolTip("取消勾选后，点「一键开启窝牌」不再弹出使用说明；再勾选可重新显示")
+        self.chk_open_tip.setStyleSheet(
+            "QCheckBox { color:#f0f0f4; background:transparent; font-size:13px; spacing:8px; }"
+            "QCheckBox::indicator { width:16px; height:16px; border:1px solid #7a7a88;"
+            "  border-radius:3px; background:#1c1c1f; }"
+            "QCheckBox::indicator:checked { background:#5a8fd4; border:1px solid #8ab4f8; }"
+        )
+        tip_label = QLabel("使用提示")
+        tip_label.setObjectName("SettingsLabel")
+        form.addRow(tip_label, self.chk_open_tip)
+
         hint = QLabel("改动即时保存。Esc 或右上角 × 关闭。")
         hint.setObjectName("SettingsHint")
         hint.setWordWrap(True)
@@ -156,6 +170,7 @@ class SettingsDialog(QDialog):
         self.cache_spin.valueChanged.connect(self._on_cache)
         self.port_edit.editingFinished.connect(self._on_port)
         self.port_edit.textChanged.connect(self._on_port_text)
+        self.chk_open_tip.toggled.connect(self._on_open_tip)
 
         self.setWindowFlag(Qt.WindowCloseButtonHint, True)
         self._acrylic_done = False
@@ -246,8 +261,12 @@ class SettingsDialog(QDialog):
             cache_count=int(self.cache_spin.value()),
             bridge_port=port,
             always_on_top=self._settings.always_on_top,
+            show_open_tip=bool(self.chk_open_tip.isChecked()),
             enabled_combat_mods=list(self._settings.enabled_combat_mods or []),
         ).clamp()
+
+    def _on_open_tip(self, _checked: bool):
+        self._persist()
 
     def _persist(self, *_args):
         if self._block:

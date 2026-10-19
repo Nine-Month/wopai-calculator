@@ -19,6 +19,7 @@ class AppSettings:
     cache_count: int = 50
     bridge_port: int = 17891
     always_on_top: bool = True  # default pinned
+    show_open_tip: bool = True  # 一键开启时是否弹出浏览器提示
     enabled_combat_mods: list[str] = field(default_factory=default_enabled_mods)
 
     def clamp(self) -> "AppSettings":
@@ -26,6 +27,7 @@ class AppSettings:
         self.cache_count = max(1, min(200, int(self.cache_count)))
         self.bridge_port = max(1024, min(65535, int(self.bridge_port)))
         self.always_on_top = bool(self.always_on_top)
+        self.show_open_tip = bool(self.show_open_tip)
         known = set(COMBAT_MOD_IDS)
         legacy = set(LEGACY_COMBAT_MOD_IDS)
         if self.enabled_combat_mods is None:
@@ -61,6 +63,7 @@ def load_settings(path: Path | None = None) -> AppSettings:
             cache_count=int(raw.get("cache_count", 50)),
             bridge_port=int(raw.get("bridge_port", 17891)),
             always_on_top=bool(raw.get("always_on_top", True)),
+            show_open_tip=bool(raw.get("show_open_tip", True)),
             enabled_combat_mods=mods,
         )
         return s.clamp()

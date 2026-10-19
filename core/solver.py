@@ -9,6 +9,7 @@ Buff +30% of one stat applies to left/right neighbor only.
 from __future__ import annotations
 
 import argparse
+import math
 import json
 import itertools
 from dataclasses import dataclass, field
@@ -253,27 +254,46 @@ def filter_pool(
     return out
 
 
+def lane_win_pct(lo: float, hi: float, enemy: float) -> float:
+    """P(power > enemy) for discrete integer powers in [ceil(lo), floor(hi)] inclusive.
+
+    If that range is empty, fall back to single-point compare using lo.
+    Win condition is strict: my_power > enemy_power.
+    """
+    try:
+        lo, hi, enemy = float(lo), float(hi), float(enemy)
+    except Exception:
+        return 0.0
+    start = math.ceil(lo - 1e-9)
+    end = math.floor(hi + 1e-9)
+    if end < start:
+        return 100.0 if enemy < lo else 0.0
+    total = end - start + 1
+    wins = sum(1 for p in range(start, end + 1) if p > enemy)
+    return wins / total * 100.0
+
+
 def _eval_win_rates(ev: dict) -> tuple[float, float]:
-    """Average / min lane win% from power bands (Uniform vs fixed enemy)."""
-    pcts: list[float] = []
-    for slot in ev.get("slots") or []:
+    """综合 = 四路胜率加总/4；最低 = 已放牌各路中的最小胜率。空位按 0% 计入综合。"""
+    slots = list(ev.get("slots") or [])
+    while len(slots) < 4:
+        slots.append({"status": "empty"})
+    four: list[float] = []
+    filled: list[float] = []
+    for slot in slots[:4]:
         if slot.get("status") == "empty":
+            four.append(0.0)
             continue
         band = slot.get("power_band") or [0, 0]
         lo = float(band[0]) if len(band) > 0 else 0.0
         hi = float(band[1]) if len(band) > 1 else lo
         enemy = float(slot.get("enemy_power") or 0)
-        if hi <= lo:
-            pcts.append(100.0 if enemy < lo else 0.0)
-        elif enemy <= lo:
-            pcts.append(100.0)
-        elif enemy >= hi:
-            pcts.append(0.0)
-        else:
-            pcts.append((hi - enemy) / (hi - lo) * 100.0)
-    if not pcts:
-        return 0.0, 0.0
-    return sum(pcts) / len(pcts), min(pcts)
+        pct = lane_win_pct(lo, hi, enemy)
+        four.append(pct)
+        filled.append(pct)
+    avg = sum(four) / 4.0
+    mn = min(filled) if filled else 0.0
+    return avg, mn
 
 
 def solve(
