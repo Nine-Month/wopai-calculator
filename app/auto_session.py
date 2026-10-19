@@ -6,6 +6,7 @@ settings — those stay on the player. Battle start is a click of the on-page
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Any
@@ -22,6 +23,7 @@ from core.auto_plan import (
     layered_battle_plan,
     lobby_progress,
     next_operation_id,
+    pick_operation_to_enter,
     select_target,
 )
 from core.buff_cache import BuffCache, unwrap_operation
@@ -234,10 +236,11 @@ class AutoSession(QObject):
             summary["reason"] = "用户终止"
             return summary
         if not snap:
-            summary["notes"].append("页面未连接或采数超时。请先注入脚本并停在行动页。")
+            summary["notes"].append("页面未连接或采数超时。请先注入脚本，并停在行动大厅或据点页。")
             summary["reason"] = "中断"
             return summary
         self.cache = BuffCache()
+        finished_ops: set[str] = set()
         guard = 0
         while not self._stopped():
             guard += 1
@@ -246,10 +249,24 @@ class AutoSession(QObject):
                 summary["reason"] = "中断"
                 return summary
             op = unwrap_operation(snap.get("operation") if isinstance(snap, dict) else None)
-            if not op or not op.get("stages"):
-                summary["notes"].append("快照里没有行动数据。请打开某个行动的据点页后再试。")
-                summary["reason"] = "中断"
-                return summary
+            # Hall URL is /zh-sg/operations (no operation id). Enter the unfinished
+            # op ourselves — today that is the middle one, CHARLIE — instead of
+            # requiring the player to open a keypoint page first.
+            if _is_lobby_snap(snap) or not op or not op.get("stages"):
+                if not _is_lobby_snap(snap) and not _lobby_sources(snap, op or {}):
+                    summary["notes"].append(
+                        "快照里没有行动数据。请停在三个行动的选择页，或某个据点布阵页。"
+                    )
+                    summary["reason"] = "中断"
+                    return summary
+                nxt_snap = self._enter_from_lobby(snap, summary, finished_ops)
+                if self._stopped():
+                    summary["reason"] = "用户终止"
+                    return summary
+                if not nxt_snap:
+                    return summary
+                snap = nxt_snap
+                continue
             diff = self.cache.update_from_operation(op)
             log.info(
                 "buff cache op=%s recomputed=%s unchanged=%s",
@@ -264,35 +281,54 @@ class AutoSession(QObject):
             blocked = campaign_note_blocked(self.cache)
             if target is None:
                 if campaign_ready(self.cache):
-                    nxt = next_operation_id(lobby, self.cache.operation_id)
-                    if nxt:
+                    done_id = self.cache.operation_id
+                    if done_id:
+                        finished_ops.add(done_id)
+                    nxt = next_operation_id(lobby, done_id)
+                    if nxt and nxt not in finished_ops:
                         self._emit(
-                            name="切换下一行动",
+                            name="回到行动大厅",
                             enemy_power=None,
                             reason=nxt,
-                            step="本行动阶段目标已完成，读取下一行动",
+                            step="本行动已完成，回大厅进入下一个未完成行动",
                             lobby=lobby,
                             token_full=stat["full"],
                             token_missed=stat["missed"],
                             stage_goal={},
                         )
-                        loaded = self._fetch_operation(nxt)
-                        if not loaded:
-                            summary["notes"].append(f"无法读取下一行动 {nxt}")
+                        if not self._return_lobby():
+                            summary["notes"].append(
+                                "本行动已完成，但无法回到 /operations 大厅（不会整页刷新）。"
+                                "请在 F12 重新粘贴注入脚本后再继续。"
+                            )
                             summary["reason"] = "中断"
                             return summary
-                        snap = dict(snap)
-                        snap["operation"] = loaded
+                        time.sleep(0.5)
+                        snap = self._refresh(20)
+                        if self._stopped():
+                            summary["reason"] = "用户终止"
+                            return summary
+                        if not snap:
+                            summary["notes"].append("回到大厅后采数超时。")
+                            summary["reason"] = "中断"
+                            return summary
                         continue
                     summary["reason"] = "完成"
-                    summary["notes"].append("当前可见行动已打完。")
+                    summary["notes"].append("三个行动都已打完。")
                     if lobby.get("uncertain"):
-                        summary["notes"].append("大厅列表不完整时，按三个行动计进度；未能自动跳到未出现在列表里的行动。")
+                        summary["notes"].append("大厅列表不完整时，进度分母仍按 3 计；列表里没有的行动不会自动跳。")
                     return summary
                 summary["notes"].append(blocked or "没有可攻击的据点，自动化停下。")
                 summary["reason"] = "中断"
                 return summary
 
+            row = self.cache.row(target["keypoint_id"])
+            if row is None or row.status != "available":
+                summary["notes"].append(
+                    f"据点 {target.get('name') or target['keypoint_id']} 不是可战斗状态，已停止（不会对未揭示据点计算或切页）。"
+                )
+                summary["reason"] = "中断"
+                return summary
             self._emit(
                 name=target["name"],
                 enemy_power=target["enemy_power"],
@@ -475,6 +511,102 @@ class AutoSession(QObject):
         summary["reason"] = "用户终止"
         return summary
 
+    def _enter_from_lobby(self, snap: dict, summary: dict, finished_ops: set[str]) -> dict | None:
+        """Open the unfinished hall operation. None means stop (reason already set)."""
+        op = unwrap_operation(snap.get("operation") if isinstance(snap, dict) else None)
+        lobby = lobby_progress(BuffCache(), _lobby_sources(snap, op))
+        items = []
+        for it in lobby.get("items") or []:
+            row = dict(it)
+            if row.get("id") in finished_ops:
+                row["completed"] = True
+                row["phase"] = "completed"
+                row["status"] = "completed"
+                row["started"] = False
+            items.append(row)
+        lobby = dict(lobby)
+        lobby["items"] = items
+        lobby["ops_done"] = sum(1 for it in items if it.get("completed"))
+        target_id = pick_operation_to_enter(lobby)
+        name = ""
+        for it in items:
+            if it.get("id") == target_id:
+                name = str(it.get("name") or target_id)
+                break
+        self._emit(
+            name=name or "行动大厅",
+            enemy_power=None,
+            reason="打开的 dossier" if target_id else "没有未完成行动",
+            step="从大厅进入未完成行动" if target_id else "三个行动都已结束",
+            lobby=lobby,
+            token_full=0,
+            token_missed=0,
+            stage_goal={},
+        )
+        if not target_id:
+            summary["reason"] = "完成"
+            summary["notes"].append("大厅里三个行动都已完成。")
+            return None
+        self.status.emit(f"进入行动 {name or target_id}")
+        if not self._open_operation(target_id):
+            summary["notes"].append(
+                f"无法从大厅进入 {name or target_id}。请重新在 F12 粘贴注入脚本；自动化不会整页刷新。"
+            )
+            summary["reason"] = "中断"
+            return None
+        fresh = self._wait_operation_page(target_id)
+        if self._stopped():
+            return None
+        if not fresh:
+            summary["notes"].append(f"已点进 {name or target_id}，但没有采到该行动的据点。")
+            summary["reason"] = "中断"
+            return None
+        return fresh
+
+    def _open_operation(self, op_id: str) -> bool:
+        self._auto_ev.clear()
+        if not self._bridge.request_open_operation(op_id):
+            return False
+        opened = self._wait_auto("open_operation", 12)
+        return bool(opened and opened.get("ok"))
+
+    def _return_lobby(self) -> bool:
+        self._auto_ev.clear()
+        if not self._bridge.request_return_lobby():
+            return False
+        back = self._wait_auto("return_lobby", 12)
+        return bool(back and back.get("ok"))
+
+    def _wait_operation_page(self, op_id: str, tries: int = 4) -> dict | None:
+        time.sleep(0.45)
+        last = None
+        for _ in range(tries):
+            if self._stopped():
+                return None
+            fresh = self._refresh(15)
+            if not fresh:
+                continue
+            last = fresh
+            got = unwrap_operation(fresh.get("operation"))
+            href = str((fresh.get("meta") or {}).get("href") or "")
+            if str(got.get("id") or "") == op_id and got.get("stages") and not _is_lobby_href(href):
+                return fresh
+        if last:
+            got = unwrap_operation(last.get("operation"))
+            if str(got.get("id") or "") == op_id and got.get("stages"):
+                # State JSON can already describe CHARLIE while the address bar
+                # is still /operations. Stamp the op onto the snapshot so the
+                # loop plans that operation instead of clicking the hall again.
+                # open_keypoint still moves the real page with pushState.
+                href = str((last.get("meta") or {}).get("href") or "")
+                if _is_lobby_href(href):
+                    last = dict(last)
+                    meta = dict(last.get("meta") or {})
+                    meta["href"] = href.rstrip("/") + "/" + op_id
+                    last["meta"] = meta
+                return last
+        return None
+
     def _ensure_keypoint(self, snap: dict, op: dict, kp_id: str) -> dict | None:
         current = _snap_kp(snap)
         if current == kp_id and _scenario_ready(snap):
@@ -548,6 +680,21 @@ def campaign_note_blocked(cache: BuffCache) -> str | None:
         if not any(r.status == "available" for r in cache.iter_rows()):
             return "还有阶段目标未完成，但没有可攻击的据点"
     return None
+
+
+_LOBBY_HREF = re.compile(r"/operations/?$", re.I)
+
+
+def _is_lobby_href(href: str) -> bool:
+    path = str(href or "").split("?")[0].split("#")[0]
+    return bool(_LOBBY_HREF.search(path))
+
+
+def _is_lobby_snap(snap: dict | None) -> bool:
+    if not isinstance(snap, dict):
+        return False
+    href = str((snap.get("meta") or {}).get("href") or "")
+    return bool(href) and _is_lobby_href(href)
 
 
 def _snap_kp(snap: dict | None) -> str | None:

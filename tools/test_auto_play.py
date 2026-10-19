@@ -22,10 +22,12 @@ from core.auto_plan import (  # noqa: E402
     finalize_reason,
     layered_battle_plan,
     lobby_progress,
+    next_operation_id,
+    pick_operation_to_enter,
     progress_bar_text,
     select_target,
 )
-from core.buff_cache import BuffCache, is_harmful_effect, stage_destroy_goal  # noqa: E402
+from core.buff_cache import BuffCache, is_harmful_effect, keypoint_status, stage_destroy_goal  # noqa: E402
 from core.items_solve import UNPURCHASABLE_COMBAT, empty_mods  # noqa: E402
 from core.resource_summary import (  # noqa: E402
     classify_progress_outcome,
@@ -339,6 +341,87 @@ def test_cheap_and_tokens():
     _assert(AUTO_TOP_N == 50, AUTO_TOP_N)
 
 
+def test_unrevealed_not_selectable():
+    """CHARLIE opening: buff source kp_04 is unrevealed, so it is not a target."""
+    _assert(keypoint_status({"status": "revealed"}) == "available", "revealed")
+    _assert(keypoint_status({"status": "unrevealed"}) == "locked", "unrevealed")
+    _assert(keypoint_status({}) == "locked", "unknown must not default to available")
+    _assert(keypoint_status({"status": "not-a-real-state"}) == "locked", "unknown status")
+    op = _load("charlie_opening.json")
+    cache = BuffCache.from_operation(op)
+    _assert(cache.row("kp_01").status == "available", cache.row("kp_01").status)
+    _assert(cache.row("kp_02").status == "available", cache.row("kp_02").status)
+    _assert(cache.row("kp_04").status == "locked", cache.row("kp_04").status)
+    _assert(cache.row("kp_04").cuts_harm, "kp_04 is still the harmful source")
+    _assert(not cache.row("kp_01").cuts_harm, "debuff victim is not the source")
+    picked = select_target(cache)
+    _assert(picked["keypoint_id"] != "kp_04", picked)
+    _assert(picked["keypoint_id"] in {"kp_01", "kp_02"}, picked)
+    _assert(picked["keypoint_id"] == "kp_02", picked)
+
+
+def test_lobby_charlie_is_only_open():
+    """Live hall: MIKE archived, CHARLIE open, 主力部队 archived → 2/3, enter CHARLIE.
+
+    URL https://pacificfront.worldofwarships.asia/zh-sg/operations
+    Left to right: strikethrough+ARCHIVE, open dossier, strikethrough+ARCHIVE.
+    """
+    op = _load("charlie_opening.json")
+    hall = op["lobbyOperations"]
+    empty = lobby_progress(BuffCache(), hall)
+    _assert(empty["ops_done"] == 2 and empty["ops_total"] == 3, empty)
+    _assert(pick_operation_to_enter(empty) == "charlie", empty)
+    phases = {it["id"]: it["phase"] for it in empty["items"]}
+    _assert(phases == {"mike": "completed", "charlie": "in_progress", "main-force": "completed"}, phases)
+    cache = BuffCache.from_operation(op)
+    lobby = lobby_progress(cache, hall)
+    _assert(lobby["ops_done"] == 2 and lobby["ops_total"] == 3, lobby)
+    _assert(lobby["cleared_kp"] == 0 and lobby["total_kp"] == 4, lobby)
+    _assert(progress_bar_text(lobby) == "行动 2/3 · 据点 0/4", progress_bar_text(lobby))
+    _assert(next_operation_id(lobby, "mike") == "charlie", lobby)
+    _assert(next_operation_id(lobby, "charlie") is None, lobby)
+    _assert(next_operation_id(lobby, "main-force") == "charlie", lobby)
+
+    # Serial chain when nothing is archived yet: finish 1 → 2 → 3 → stop.
+    chain = [
+        {"id": "op1", "name": "一", "index": 0, "isFinished": False, "isStarted": True},
+        {"id": "op2", "name": "二", "index": 1, "isFinished": False, "isStarted": False},
+        {"id": "op3", "name": "三", "index": 2, "isFinished": False, "isStarted": False},
+    ]
+
+    def _done(op_id: str) -> BuffCache:
+        return BuffCache.from_operation({
+            "id": op_id,
+            "name": op_id,
+            "stages": [{
+                "id": "s",
+                "keypoints": [{
+                    "id": "k",
+                    "status": "cleared",
+                    "slots": {"0": {"enemy": {"code": "e", "name": "e", "power": 10, "vulns": {}}, "rewards": []}},
+                }],
+            }],
+        })
+
+    first = lobby_progress(_done("op1"), [{**chain[0], "isFinished": True}, chain[1], chain[2]])
+    _assert(first["ops_done"] == 1, first)
+    _assert(next_operation_id(first, "op1") == "op2", first)
+    second = lobby_progress(_done("op2"), [
+        {**chain[0], "isFinished": True},
+        {**chain[1], "isFinished": True},
+        chain[2],
+    ])
+    _assert(next_operation_id(second, "op2") == "op3", second)
+    third = lobby_progress(_done("op3"), [
+        {**chain[0], "isFinished": True},
+        {**chain[1], "isFinished": True},
+        {**chain[2], "isFinished": True},
+    ])
+    _assert(third["ops_done"] == 3, third)
+    _assert(next_operation_id(third, "op3") is None, third)
+    _assert(pick_operation_to_enter(third) is None, third)
+
+
 def test_wiring_and_inject():
     mw = (ROOT / "app" / "ui" / "main_window.py").read_text(encoding="utf-8")
     _assert('self.btn_auto = QPushButton("自动化窝牌")' in mw, "auto button missing")
@@ -349,7 +432,18 @@ def test_wiring_and_inject():
     _assert("keypoint/start" in inject, "inject should still document it does not call start API")
     _assert('msg.type === "start_battle"' in inject, "battle command not wired")
     _assert("PAY_OR_SETTINGS" in inject, "paid/settings guard missing")
+    _assert("function openOperation(" in inject, "lobby enter missing")
+    _assert("function returnToLobby(" in inject, "return to lobby missing")
+    _assert('msg.type === "open_operation"' in inject, "open_operation command missing")
+    _assert('msg.type === "return_lobby"' in inject, "return_lobby command missing")
+    _assert("isFinished" in inject, "hall finished flag not read")
+    _assert("location.reload(" not in inject, "inject must not full-reload")
     server = (ROOT / "app" / "bridge" / "server.py").read_text(encoding="utf-8")
+    _assert("def request_open_operation" in server, "bridge open_operation missing")
+    _assert("def request_return_lobby" in server, "bridge return_lobby missing")
+    session = (ROOT / "app" / "auto_session.py").read_text(encoding="utf-8")
+    _assert("pick_operation_to_enter" in session, "session does not enter from the hall")
+    _assert("_return_lobby" in session, "session does not return to the hall")
     _assert("def request_start_battle" in server, "bridge start missing")
     # Manual deploy path must remain a place-only command.
     _assert('payload = {\n            "type": "deploy"' in server, "manual deploy changed")
@@ -367,6 +461,8 @@ def main():
     test_last_keypoint_effectiveness()
     test_unpurchasable_then_fallback()
     test_cheap_and_tokens()
+    test_unrevealed_not_selectable()
+    test_lobby_charlie_is_only_open()
     test_wiring_and_inject()
     print("AUTO PLAY TESTS OK")
 

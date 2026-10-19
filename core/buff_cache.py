@@ -37,9 +37,13 @@ LOCKED_STATES = {
     "hidden",
     "blocked",
     "sealed",
+    "unrevealed",
+    "not_revealed",
+    "unopened",
 }
 AVAILABLE_STATES = {
     "available",
+    "revealed",
     "opened",
     "open",
     "active",
@@ -85,19 +89,32 @@ def _truthy_flag(kp: dict, *keys: str) -> bool:
 
 
 def keypoint_status(kp: dict) -> str:
-    """Normalize live keypoint state to cleared / locked / available."""
+    """Normalize live keypoint state to cleared / locked / available.
+
+    Only ``revealed`` and other explicit attackable markers become ``available``.
+    ``unrevealed``, ``locked``, and any unrecognized status stay ``locked``.
+    The old default of ``available`` treated an unrevealed buff source as a
+    legal target, so automation would jump to a keypoint that cannot be fought.
+    """
     if _truthy_flag(kp, "isCleared", "cleared", "completed", "isCompleted", "isDestroyed"):
         return "cleared"
     raw = str(kp.get("status") or kp.get("state") or kp.get("availability") or "").strip().lower()
     if raw in CLEARED_STATES:
         return "cleared"
-    if raw in LOCKED_STATES or _truthy_flag(kp, "isLocked", "locked"):
+    # Status wins over isCurrent / canAttack: an unrevealed node is not a fight.
+    if (
+        raw in LOCKED_STATES
+        or "unreveal" in raw
+        or _truthy_flag(kp, "isLocked", "locked", "unrevealed")
+    ):
         return "locked"
-    if raw in AVAILABLE_STATES or _truthy_flag(kp, "isCurrent", "canAttack", "attackable"):
+    if raw in AVAILABLE_STATES or _truthy_flag(
+        kp, "isCurrent", "canAttack", "attackable", "isRevealed", "revealed"
+    ):
         return "available"
     if "lock" in raw or raw in {"closed"}:
         return "locked"
-    return "available"
+    return "locked"
 
 
 def is_optional_keypoint(kp: dict) -> bool:

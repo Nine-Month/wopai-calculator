@@ -11,7 +11,7 @@
  */
 (function () {
   "use strict";
-  const PF_INJECT_VERSION = "2026-10-19T · v9-auto-battle";
+  const PF_INJECT_VERSION = "2026-10-19T · v10-lobby-chain";
   console.info("[PFHelper] inject boot", PF_INJECT_VERSION, location.href);
 
   // Always tear down prior inject so CDP / paste can upgrade the script.
@@ -258,10 +258,13 @@
 
   function looksLikeOperation(o) {
     if (!o || typeof o !== "object") return false;
-    if (o.stages || o.keypoints || o.keyPoints) return true;
+    if (o.isFinished != null || o.isStarted != null) return true;
     if (o.isCompleted != null || o.completed != null || o.isCleared != null) return true;
+    if (o.stages || o.keypoints) return true;
+    // Hall summaries often store keyPoints as a count, including 0.
+    if (typeof o.keyPoints === "number" || Array.isArray(o.keyPoints)) return true;
     const status = String(o.status || o.state || "");
-    return /^(completed|cleared|active|current|locked|opened|available|in_progress|pending|done|finished)$/i.test(
+    return /^(completed|cleared|active|current|locked|opened|available|in_progress|pending|done|finished|archived)$/i.test(
       status
     );
   }
@@ -272,20 +275,32 @@
     if (!id || typeof id !== "string") return null;
     const status = String(o.status || o.state || "").toLowerCase();
     const completed = !!(
+      o.isFinished ||
       o.isCompleted ||
       o.completed ||
       o.isCleared ||
+      o.archived ||
+      o.isArchived ||
       status === "completed" ||
       status === "cleared" ||
       status === "done" ||
-      status === "finished"
+      status === "finished" ||
+      status === "archived"
     );
+    const started = !!(o.isStarted || o.isCurrent) && !completed;
     const index = o.index != null ? o.index : o.order != null ? o.order : null;
+    let phase = "not_started";
+    if (completed) phase = "completed";
+    else if (started || status === "active" || status === "in_progress" || status === "current") phase = "in_progress";
     return {
       id: id,
       name: o.name || o.title || "",
-      status: status || (completed ? "completed" : "active"),
+      status: phase,
+      phase: phase,
       completed: completed,
+      started: phase === "in_progress",
+      isFinished: completed,
+      isStarted: phase === "in_progress",
       index: index,
     };
   }
@@ -418,10 +433,17 @@
         }
       }
       const u = new URL(location.href);
-      const replaced = u.pathname.replace(
+      let replaced = u.pathname.replace(
         /\/operations\/[^/]+\/[^/]+/,
         "/operations/" + operationId + "/" + keypointId
       );
+      // Hall URL is /zh-sg/operations with no ids. Push the keypoint path;
+      // do not assign location.href (a full load drops this inject).
+      if (replaced === u.pathname && /\/operations\/?$/i.test(u.pathname)) {
+        replaced = u.pathname.replace(/\/?$/, "/") + operationId + "/" + keypointId;
+      } else if (replaced === u.pathname && /\/operations\/[^/]+\/?$/i.test(u.pathname)) {
+        replaced = u.pathname.replace(/\/?$/, "/") + keypointId;
+      }
       if (replaced !== u.pathname) {
         history.pushState({}, "", replaced + u.search + u.hash);
         window.dispatchEvent(new PopStateEvent("popstate"));
@@ -432,6 +454,117 @@
       }
       result.error =
         "无法在不刷新页面的情况下切到该据点。请手动点开据点；若整页刷新，需要在 F12 重新粘贴注入脚本。";
+    } catch (e) {
+      result.ok = false;
+      result.error = String((e && e.message) || e);
+    }
+    return result;
+  }
+
+  /**
+   * Enter one operation from the hall (/zh-sg/operations) without a full reload.
+   * Clicks an in-page link first, then history.pushState + popstate.
+   */
+  function openOperation(operationId) {
+    const result = { ok: false, method: null, error: null, href: location.href };
+    try {
+      if (!operationId) {
+        result.error = "缺少行动 id";
+        return result;
+      }
+      const href = location.href || "";
+      if (href.indexOf("/operations/" + operationId) >= 0) {
+        result.ok = true;
+        result.method = "already";
+        return result;
+      }
+      const anchors = document.querySelectorAll("a[href]");
+      for (const a of anchors) {
+        const h = a.getAttribute("href") || "";
+        const label = visibleText(a);
+        if (PAY_OR_SETTINGS.test(label) || PAY_OR_SETTINGS.test(h)) continue;
+        if (h.indexOf(operationId) < 0 || h.indexOf("/operations/") < 0) continue;
+        a.click();
+        result.ok = true;
+        result.method = "anchor";
+        result.href = location.href;
+        return result;
+      }
+      let marked = null;
+      try {
+        marked = document.querySelector(
+          '[data-operation-id="' + operationId + '"], [data-id="' + operationId + '"]'
+        );
+      } catch (_) {}
+      if (marked) {
+        const host = marked.closest("a,button,[role='button']") || marked;
+        const label = visibleText(host);
+        if (!PAY_OR_SETTINGS.test(label)) {
+          host.click();
+          result.ok = true;
+          result.method = "data-id";
+          result.href = location.href;
+          return result;
+        }
+      }
+      const u = new URL(location.href);
+      let nextPath = u.pathname;
+      if (/\/operations\/?$/i.test(u.pathname)) {
+        nextPath = u.pathname.replace(/\/?$/, "/") + operationId;
+      } else if (/\/operations\/[^/]+\/[^/]+/.test(u.pathname)) {
+        nextPath = u.pathname.replace(/\/operations\/[^/]+\/[^/]+/, "/operations/" + operationId);
+      } else if (/\/operations\/[^/]+/.test(u.pathname)) {
+        nextPath = u.pathname.replace(/\/operations\/[^/]+/, "/operations/" + operationId);
+      }
+      if (nextPath !== u.pathname) {
+        history.pushState({}, "", nextPath + u.search + u.hash);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+        result.ok = true;
+        result.method = "history";
+        result.href = location.href;
+        return result;
+      }
+      result.error = "无法在不刷新页面的情况下进入该行动。请手动点开；不要整页刷新。";
+    } catch (e) {
+      result.ok = false;
+      result.error = String((e && e.message) || e);
+    }
+    return result;
+  }
+
+  /** Back to the three-operation hall. SPA only — never location.reload. */
+  function returnToLobby() {
+    const result = { ok: false, method: null, error: null, href: location.href };
+    try {
+      const u = new URL(location.href);
+      if (/\/operations\/?$/i.test(u.pathname)) {
+        result.ok = true;
+        result.method = "already";
+        return result;
+      }
+      const anchors = document.querySelectorAll("a[href]");
+      for (const a of anchors) {
+        const h = a.getAttribute("href") || "";
+        const label = visibleText(a);
+        if (PAY_OR_SETTINGS.test(label) || PAY_OR_SETTINGS.test(h)) continue;
+        if (/\/operations\/?$/.test(h.split("?")[0].split("#")[0])) {
+          a.click();
+          result.ok = true;
+          result.method = "anchor";
+          result.href = location.href;
+          return result;
+        }
+      }
+      const hall = u.pathname.replace(/\/operations\/.+$/i, "/operations");
+      if (hall !== u.pathname && /\/operations$/i.test(hall)) {
+        history.pushState({}, "", hall + u.search + u.hash);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+        result.ok = true;
+        result.method = "history";
+        result.href = location.href;
+        return result;
+      }
+      result.error = "无法在不刷新页面的情况下回到行动大厅。";
     } catch (e) {
       result.ok = false;
       result.error = String((e && e.message) || e);
@@ -1140,6 +1273,30 @@
           ok: !!started.ok,
           error: started.error || null,
           detail: started,
+        });
+        return;
+      }
+      if (msg.type === "open_operation") {
+        const opened = openOperation(msg.operationId);
+        console.info("[PFHelper] openOperation", opened);
+        this.send({
+          type: "auto_result",
+          action: "open_operation",
+          ok: !!opened.ok,
+          error: opened.error || null,
+          detail: opened,
+        });
+        return;
+      }
+      if (msg.type === "return_lobby") {
+        const back = returnToLobby();
+        console.info("[PFHelper] returnToLobby", back);
+        this.send({
+          type: "auto_result",
+          action: "return_lobby",
+          ok: !!back.ok,
+          error: back.error || null,
+          detail: back,
         });
         return;
       }

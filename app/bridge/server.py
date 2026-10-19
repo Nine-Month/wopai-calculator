@@ -98,6 +98,17 @@ class BridgeServer:
         """Automation only: ask the page to click 「战斗」. Not used by manual deploy."""
         return self._broadcast({"type": "start_battle"})
 
+    def request_open_operation(self, operation_id: str) -> bool:
+        """SPA-navigate into one operation from the hall. Does not reload the page."""
+        return self._broadcast({
+            "type": "open_operation",
+            "operationId": operation_id,
+        })
+
+    def request_return_lobby(self) -> bool:
+        """SPA-navigate back to /operations. Does not reload the page."""
+        return self._broadcast({"type": "return_lobby"})
+
     def request_fetch_operation(self, operation_id: str) -> bool:
         """Read-only GET of one operation. Does not spend currency or change settings."""
         return self._broadcast({

@@ -673,14 +673,16 @@ def _power_key(row: KpRow):
 def select_target(cache: BuffCache) -> dict | None:
     """Pick the next keypoint.
 
-    Selectable keypoints whose stage destroy quota is still open are fought
-    first. Among them, keypoints that remove an enemy buff or our debuff come
-    before the lowest enemy board power (``enemy_power`` from the buff cache).
+    Only rows with status ``available`` are candidates. That status is
+    ``revealed`` (or an explicit attackable marker). ``unrevealed`` / unknown
+    keypoints are locked and must never be solved or navigated to, even when
+    they are the source of an enemy buff or our debuff.
 
-    Once a stage quota is met, leftover non-optional keypoints that are still
-    the only way forward are transition fights (one lowest-power ship, no
-    search). The operation's last keypoint is never cheap-fought when it pays
-    progress tokens — that node uses the effectiveness rule instead.
+    Among attackable keypoints, ones that remove such an effect come before
+    the lowest enemy board power. Once a stage quota is met, leftover
+    non-optional keypoints that are still the only way forward are transition
+    fights (one lowest-power ship, no search). The operation's last keypoint
+    is never cheap-fought when it pays progress tokens.
     """
     if cache is None:
         return None
@@ -751,15 +753,65 @@ def select_target(cache: BuffCache) -> dict | None:
 
 CAMPAIGN_OPS = 3
 
+_COMPLETED_STATUS = {"completed", "cleared", "done", "finished", "archived", "archive"}
+_PROGRESS_STATUS = {
+    "active",
+    "current",
+    "opened",
+    "available",
+    "in_progress",
+    "started",
+    "incomplete",
+    "open",
+}
+_NOT_STARTED_STATUS = {
+    "locked",
+    "closed",
+    "pending",
+    "upcoming",
+    "not_started",
+    "new",
+    "unopened",
+    "unrevealed",
+}
+
+
+def operation_phase(raw: dict) -> str:
+    """completed / in_progress / not_started from hall flags.
+
+    Live hall (2026-10-19, ``/zh-sg/operations``, left to right): MIKE finished
+    (strikethrough + closed ARCHIVE folder), CHARLIE still open (dossier open,
+    difficulty stars), 主力部队 finished (strikethrough + ARCHIVE). The API
+    marks those with ``isFinished`` / ``isStarted``, not with list index.
+    Index is order only — a later op can already be archived while the middle
+    one is the only fight left.
+    """
+    if not isinstance(raw, dict):
+        return "not_started"
+    status = str(raw.get("status") or raw.get("state") or "").strip().lower()
+    phase = str(raw.get("phase") or "").strip().lower()
+    finished = bool(
+        raw.get("isFinished")
+        or raw.get("isCompleted")
+        or raw.get("completed")
+        or raw.get("isCleared")
+        or raw.get("archived")
+        or raw.get("isArchived")
+        or status in _COMPLETED_STATUS
+        or phase == "completed"
+    )
+    if finished:
+        return "completed"
+    started = raw.get("isStarted")
+    if started is True or raw.get("isCurrent") or status in _PROGRESS_STATUS or phase == "in_progress":
+        return "in_progress"
+    if started is False or status in _NOT_STARTED_STATUS or phase == "not_started":
+        return "not_started"
+    return "not_started"
+
 
 def normalize_lobby_entry(raw: dict) -> dict:
-    status = str(raw.get("status") or raw.get("state") or "").strip().lower()
-    completed = bool(
-        raw.get("completed")
-        or raw.get("isCompleted")
-        or raw.get("isCleared")
-        or status in {"completed", "cleared", "done", "finished"}
-    )
+    phase = operation_phase(raw)
     index = raw.get("index", raw.get("order"))
     try:
         index = int(index) if index is not None else None
@@ -768,10 +820,23 @@ def normalize_lobby_entry(raw: dict) -> dict:
     return {
         "id": str(raw.get("id") or raw.get("operationId") or ""),
         "name": str(raw.get("name") or raw.get("title") or ""),
-        "status": status or ("completed" if completed else "active"),
-        "completed": completed,
+        "status": phase,
+        "phase": phase,
+        "completed": phase == "completed",
+        "started": phase == "in_progress",
         "index": index,
     }
+
+
+def _ordered_lobby(items: list[dict]) -> list[dict]:
+    def sort_key(it: dict):
+        idx = it.get("index")
+        ident = str(it.get("id") or "")
+        if isinstance(idx, int):
+            return (0, idx, ident)
+        return (1, 0, ident)
+
+    return sorted(items, key=sort_key)
 
 
 def lobby_progress(
@@ -782,60 +847,51 @@ def lobby_progress(
 ) -> dict[str, Any]:
     """Three-operation hall progress plus this operation's cleared/total keypoints.
 
-    Counts come from the live operation (so a resumed half-finished operation is
-    correct) and from lobby completion flags. When the hall list is missing, the
-    denominator stays 3 and ``index`` on the current operation fills how many
-    operations are already behind us.
+    ``ops_done`` is how many hall entries are finished (ARCHIVE / strikethrough /
+    ``isFinished``), not the current operation's index. A resumed day where only
+    the middle operation is still open is therefore 2/3, and keypoint counts
+    come from that live operation. When the hall list is shorter than 3 the
+    denominator stays 3 and ``uncertain`` is set — index is not used as a
+    substitute completed-count.
     """
     items = [normalize_lobby_entry(x) for x in (lobby_ops or []) if isinstance(x, dict)]
     items = [x for x in items if x["id"]]
     current_id = cache.operation_id
-    current_done = bool(cache.is_complete)
+    current_done = bool(cache.operation_id) and bool(cache.is_complete)
     found = False
     for it in items:
         if it["id"] == current_id:
             it["completed"] = current_done
+            it["phase"] = "completed" if current_done else "in_progress"
+            it["status"] = it["phase"]
+            it["started"] = not current_done
             found = True
     if current_id and not found:
         items.append({
             "id": current_id,
             "name": cache.operation_name,
-            "status": "completed" if current_done else "active",
+            "status": "completed" if current_done else "in_progress",
+            "phase": "completed" if current_done else "in_progress",
             "completed": current_done,
+            "started": not current_done,
             "index": None,
         })
 
-    indexes = [it["index"] for it in items if isinstance(it.get("index"), int)]
-    zero_based = bool(indexes) and (0 in indexes or max(indexes) == len(items) - 1)
     padded = len(items) < campaign_size
     total = len(items) if len(items) >= campaign_size else campaign_size
-
-    if items and len([it for it in items if it["id"] != current_id]) >= 1 and not padded:
-        done = sum(1 for it in items if it["completed"])
-        uncertain = False
-    else:
-        cur = next((it for it in items if it["id"] == current_id), None)
-        idx = cur.get("index") if cur else None
-        if isinstance(idx, int):
-            pos = idx if zero_based or idx == 0 else idx - 1
-            pos = max(0, int(pos))
-            done = pos + (1 if current_done else 0)
-            uncertain = padded
-        else:
-            done = sum(1 for it in items if it["completed"])
-            uncertain = padded or len(items) < campaign_size
+    done = sum(1 for it in items if it["completed"])
     done = max(0, min(int(done), int(total)))
     return {
         "ops_done": done,
         "ops_total": int(total),
-        "uncertain": uncertain,
+        "uncertain": padded,
         "padded": padded,
         "cleared_kp": cache.cleared_count,
         "total_kp": cache.total_count,
         "current_complete": current_done,
         "current_id": current_id,
         "current_name": cache.operation_name,
-        "items": items,
+        "items": _ordered_lobby(items),
     }
 
 
@@ -871,15 +927,14 @@ def format_hms(seconds: float) -> str:
 
 
 def next_operation_id(lobby: dict, current_id: str) -> str | None:
-    items = list(lobby.get("items") or [])
-    # Prefer explicit order, else list order.
-    def sort_key(it: dict):
-        idx = it.get("index")
-        return (0, idx) if isinstance(idx, int) else (1, items.index(it) if it in items else 0)
+    """Next unfinished operation after ``current_id`` (wraps to an earlier one).
 
-    ordered = sorted(items, key=sort_key)
-    seen_current = current_id not in {it.get("id") for it in ordered}
-    passed = seen_current
+    Finished hall entries are skipped, so when MIKE and 主力部队 are archived
+    and CHARLIE is the open middle op, the successor of MIKE is CHARLIE and
+    CHARLIE itself has no successor.
+    """
+    ordered = _ordered_lobby(list(lobby.get("items") or []))
+    passed = current_id not in {it.get("id") for it in ordered}
     for it in ordered:
         if it.get("id") == current_id:
             passed = True
@@ -889,6 +944,22 @@ def next_operation_id(lobby: dict, current_id: str) -> str | None:
     for it in ordered:
         if it.get("id") and it.get("id") != current_id and not it.get("completed"):
             return str(it["id"])
+    return None
+
+
+def pick_operation_to_enter(lobby: dict) -> str | None:
+    """From the three-op hall, the operation automation should open.
+
+    Prefer one already in progress (open dossier). Otherwise the earliest
+    not-yet-started entry. Archived / strikethrough operations are skipped.
+    """
+    ordered = _ordered_lobby(list(lobby.get("items") or []))
+    unfinished = [it for it in ordered if it.get("id") and not it.get("completed")]
+    for it in unfinished:
+        if it.get("phase") == "in_progress" or it.get("started"):
+            return str(it["id"])
+    if unfinished:
+        return str(unfinished[0]["id"])
     return None
 
 

@@ -1,0 +1,60 @@
+{
+  "id": "charlie",
+  "name": "CHARLIE",
+  "index": 1,
+  "comment": "Opening of the middle operation. kp_01 and kp_02 are revealed (fightable). kp_04 is the buff source but still unrevealed, so it must not be selected. Hall: MIKE archived, CHARLIE open, 主力部队 archived.",
+  "lobbyOperations": [
+    {"id": "mike", "name": "MIKE", "index": 0, "isFinished": true, "isStarted": true},
+    {"id": "charlie", "name": "CHARLIE", "index": 1, "isFinished": false, "isStarted": true},
+    {"id": "main-force", "name": "主力部队", "index": 2, "isFinished": true, "isStarted": true}
+  ],
+  "effects": [
+    {
+      "source": "kp_04",
+      "applyTo": ["kp_01"],
+      "isSubsequent": false,
+      "payload": {"type": 4, "specs": {"0": 0.2, "1": 0.2, "2": 0.2}}
+    }
+  ],
+  "stages": [
+    {
+      "id": "st-open",
+      "name": "开局",
+      "condition": {"type": "cleared_stage", "target": 2, "total": 4},
+      "keypoints": [
+        {
+          "id": "kp_01",
+          "name": "第一据点",
+          "status": "revealed",
+          "slots": {
+            "0": {"enemy": {"code": "e1", "name": "e", "power": 120, "vulns": {}}, "rewards": []}
+          }
+        },
+        {
+          "id": "kp_02",
+          "name": "第二据点",
+          "status": "revealed",
+          "slots": {
+            "0": {"enemy": {"code": "e2", "name": "e", "power": 80, "vulns": {}}, "rewards": []}
+          }
+        },
+        {
+          "id": "kp_03",
+          "name": "第三据点",
+          "status": "unrevealed",
+          "slots": {
+            "0": {"enemy": {"code": "e3", "name": "e", "power": 90, "vulns": {}}, "rewards": []}
+          }
+        },
+        {
+          "id": "kp_04",
+          "name": "第四据点",
+          "status": "unrevealed",
+          "slots": {
+            "0": {"enemy": {"code": "e4", "name": "e", "power": 400, "vulns": {}}, "rewards": []}
+          }
+        }
+      ]
+    }
+  ]
+}
