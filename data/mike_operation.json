@@ -1,0 +1,35 @@
+{
+  "id": "mike-op",
+  "name": "麦克行动",
+  "index": 1,
+  "lobbyOperations": [
+    {"id": "op-alpha", "name": "行动一", "completed": true, "index": 0},
+    {"id": "mike-op", "name": "麦克行动", "completed": false, "index": 1},
+    {"id": "op-gamma", "name": "行动三", "completed": false, "index": 2}
+  ],
+  "effects": [],
+  "stages": [
+    {
+      "id": "mike-st0",
+      "name": "已完成阶段",
+      "condition": {"type": "cleared_stage", "target": 4, "total": 4},
+      "keypoints": [
+        {"id": "mike-a1", "name": "A1", "status": "cleared", "slots": {"0": {"enemy": {"code": "v1", "name": "e", "power": 50, "vulns": {}}, "rewards": [{"code": "steel", "amount": 1}]}}},
+        {"id": "mike-a2", "name": "A2", "status": "cleared", "slots": {"0": {"enemy": {"code": "v2", "name": "e", "power": 60, "vulns": {}}, "rewards": []}}},
+        {"id": "mike-a3", "name": "A3", "status": "cleared", "slots": {"0": {"enemy": {"code": "v3", "name": "e", "power": 70, "vulns": {}}, "rewards": []}}},
+        {"id": "mike-a4", "name": "A4", "status": "cleared", "slots": {"0": {"enemy": {"code": "v4", "name": "e", "power": 80, "vulns": {}}, "rewards": []}}}
+      ]
+    },
+    {
+      "id": "mike-st1",
+      "name": "打到一半",
+      "condition": {"type": "cleared_stage", "target": 4, "total": 4},
+      "keypoints": [
+        {"id": "mike-b1", "name": "B1", "status": "cleared", "slots": {"0": {"enemy": {"code": "v5", "name": "e", "power": 90, "vulns": {}}, "rewards": []}}},
+        {"id": "mike-b2", "name": "B2", "status": "cleared", "slots": {"0": {"enemy": {"code": "v6", "name": "e", "power": 100, "vulns": {}}, "rewards": []}}},
+        {"id": "mike-b3", "name": "低战力", "status": "available", "slots": {"0": {"enemy": {"code": "v7", "name": "e", "power": 90, "vulns": {}}, "rewards": [{"code": "oil", "amount": 3}]}}},
+        {"id": "mike-b4", "name": "高战力", "status": "available", "slots": {"0": {"enemy": {"code": "v8", "name": "e", "power": 140, "vulns": {}}, "rewards": []}}}
+      ]
+    }
+  ]
+}

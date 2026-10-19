@@ -1,0 +1,84 @@
+{
+  "id": "op-today-2",
+  "name": "今日行动二",
+  "index": 0,
+  "lobbyOperations": [
+    {"id": "op-today-2", "name": "今日行动二", "completed": false, "index": 0},
+    {"id": "op-today-3", "name": "今日行动三", "completed": false, "index": 1},
+    {"id": "op-today-4", "name": "今日行动四", "completed": false, "index": 2}
+  ],
+  "effects": [
+    {
+      "source": "kp-artillery",
+      "applyTo": ["kp-weak"],
+      "isSubsequent": false,
+      "payload": {
+        "type": 4,
+        "specs": {"0": 0.16, "1": 0.16, "2": 0.16}
+      }
+    }
+  ],
+  "stages": [
+    {
+      "id": "st-open",
+      "name": "外围",
+      "condition": {"type": "cleared_stage", "target": 2, "total": 3},
+      "keypoints": [
+        {
+          "id": "kp-done",
+          "name": "已清据点",
+          "status": "cleared",
+          "slots": {
+            "0": {"enemy": {"code": "vehicle_done", "name": "残骸", "type": "destroyer", "power": 80, "vulns": {}}, "rewards": []}
+          }
+        },
+        {
+          "id": "kp-artillery",
+          "name": "岸防炮台",
+          "status": "available",
+          "slots": {
+            "0": {"enemy": {"code": "vehicle_gun", "name": "岸防炮", "type": "coastal_artillery", "power": 400, "vulns": {}}, "rewards": [{"code": "steel", "amount": 12}]}
+          }
+        },
+        {
+          "id": "kp-weak",
+          "name": "薄弱前哨",
+          "status": "available",
+          "slots": {
+            "0": {"enemy": {"code": "vehicle_scout", "name": "侦察艇", "type": "destroyer", "power": 100, "vulns": {}}, "rewards": [{"code": "steel", "amount": 4}]}
+          }
+        }
+      ]
+    },
+    {
+      "id": "st-last",
+      "name": "末阶段",
+      "condition": {"type": "cleared_stage", "target": 1, "total": 1},
+      "keypoints": [
+        {
+          "id": "kp-final",
+          "name": "进度奖据点",
+          "status": "locked",
+          "slots": {
+            "0": {
+              "enemy": {"code": "vehicle_boss", "name": "旗舰", "type": "battleship", "power": 220, "vulns": {}},
+              "rewards": [{"code": "adeck_progress_points", "amount": 30}]
+            },
+            "1": {
+              "enemy": {"code": "vehicle_boss2", "name": "护航", "type": "cruiser", "power": 180, "vulns": {}},
+              "rewards": [{"code": "adeck_progress_points", "amount": 20}]
+            },
+            "2": {
+              "enemy": {"code": "vehicle_boss3", "name": "僚舰", "type": "destroyer", "power": 90, "vulns": {}},
+              "rewards": [{"code": "steel", "amount": 8}]
+            },
+            "3": {
+              "enemy": {"code": "vehicle_boss4", "name": "哨戒", "type": "destroyer", "power": 70, "vulns": {}},
+              "rewards": []
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

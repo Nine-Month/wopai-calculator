@@ -120,6 +120,26 @@ QPushButton#StopBtn:disabled {
     color: #988;
     border: 1px solid rgba(120, 80, 80, 0.3);
 }
+QPushButton#AutoBtn {
+    min-height: 34px;
+    max-height: 34px;
+    font-weight: 700;
+    font-size: 13px;
+    background-color: rgba(232, 184, 48, 235);
+    color: #1c1404;
+    border: 1px solid rgba(255, 220, 120, 0.75);
+}
+QPushButton#AutoBtn:hover {
+    background-color: rgba(232, 184, 48, 235);
+}
+QPushButton#AutoBtn:pressed {
+    background-color: rgba(196, 150, 30, 240);
+}
+QPushButton#AutoBtn:disabled {
+    background-color: rgba(120, 100, 40, 160);
+    color: #3a3424;
+    border: 1px solid rgba(180, 150, 60, 0.25);
+}
 QPushButton#PrimaryBtn {
     min-height: 34px;
     max-height: 34px;

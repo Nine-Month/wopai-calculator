@@ -4,11 +4,14 @@
  * http://127.0.0.1:PORT/inject.js
  *
  * Connects to local helper WS, scrapes API dumps, places ships/mods on board.
- * NEVER calls /api/v2/keypoint/start/ or /keypoint/start/dry/ (no fight, no dry).
+ * Manual deploy never starts a fight and this script never calls
+ * /api/v2/keypoint/start/ or /keypoint/start/dry/.
+ * Automation (explicit user action) may click the on-page 「战斗」 button only.
+ * It must not click buy / post / account-settings controls.
  */
 (function () {
   "use strict";
-  const PF_INJECT_VERSION = "2026-10-16T09:00+08 · v8-mods-place";
+  const PF_INJECT_VERSION = "2026-10-19T · v9-auto-battle";
   console.info("[PFHelper] inject boot", PF_INJECT_VERSION, location.href);
 
   // Always tear down prior inject so CDP / paste can upgrade the script.
@@ -253,6 +256,189 @@
     return { operationId, keypointId };
   }
 
+  function looksLikeOperation(o) {
+    if (!o || typeof o !== "object") return false;
+    if (o.stages || o.keypoints || o.keyPoints) return true;
+    if (o.isCompleted != null || o.completed != null || o.isCleared != null) return true;
+    const status = String(o.status || o.state || "");
+    return /^(completed|cleared|active|current|locked|opened|available|in_progress|pending|done|finished)$/i.test(
+      status
+    );
+  }
+
+  function asOpSummary(o) {
+    if (!looksLikeOperation(o)) return null;
+    const id = o.id || o.operationId;
+    if (!id || typeof id !== "string") return null;
+    const status = String(o.status || o.state || "").toLowerCase();
+    const completed = !!(
+      o.isCompleted ||
+      o.completed ||
+      o.isCleared ||
+      status === "completed" ||
+      status === "cleared" ||
+      status === "done" ||
+      status === "finished"
+    );
+    const index = o.index != null ? o.index : o.order != null ? o.order : null;
+    return {
+      id: id,
+      name: o.name || o.title || "",
+      status: status || (completed ? "completed" : "active"),
+      completed: completed,
+      index: index,
+    };
+  }
+
+  function collectLobby(state) {
+    const found = [];
+    const seen = {};
+    const un = unwrap(state) || {};
+    const buckets = [
+      un.operations,
+      un.lobby && un.lobby.operations,
+      un.event && un.event.operations,
+      un.campaign && un.campaign.operations,
+      un.status && un.status.operations,
+      un.result && un.result.operations,
+    ];
+    try {
+      for (const key of Object.keys(un)) {
+        if (/operation/i.test(key) && Array.isArray(un[key])) buckets.push(un[key]);
+      }
+    } catch (_) {}
+    for (const arr of buckets) {
+      if (!Array.isArray(arr) || arr.length < 1 || arr.length > 8) continue;
+      for (const item of arr) {
+        const sum = asOpSummary(item);
+        if (!sum || seen[sum.id]) continue;
+        seen[sum.id] = true;
+        found.push(sum);
+      }
+    }
+    return found;
+  }
+
+  const PAY_OR_SETTINGS = /购买|商店|发帖|分享|设置|充值|礼包|通行证|订阅|账号|支付|premium|buy|shop|post|settings|account/i;
+
+  function visibleText(el) {
+    return String((el && (el.innerText || el.textContent)) || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isBattleLabel(text) {
+    const t = String(text || "").trim();
+    if (!t || PAY_OR_SETTINGS.test(t)) return false;
+    const compact = t.replace(/\s+/g, "");
+    if (compact === "战斗" || compact === "开始战斗" || compact === "开战") return true;
+    return /^战斗[（(].{0,12}[）)]$/.test(t);
+  }
+
+  function findBattleButton() {
+    const nodes = document.querySelectorAll("button, [role='button']");
+    let fallback = null;
+    for (const el of nodes) {
+      const t = visibleText(el);
+      const aria = (el.getAttribute && el.getAttribute("aria-label")) || "";
+      if (PAY_OR_SETTINGS.test(aria)) continue;
+      if (!isBattleLabel(t) && !isBattleLabel(aria)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") continue;
+      if (el.tagName === "BUTTON") return el;
+      fallback = fallback || el;
+    }
+    return fallback;
+  }
+
+  /**
+   * Click only the battle button. Does not call keypoint/start and does not
+   * click purchase, post, or settings controls.
+   */
+  function startBattle() {
+    const result = { ok: false, method: "click", error: null, label: null };
+    try {
+      const btn = findBattleButton();
+      if (!btn) {
+        result.error = "页面上没有可点的「战斗」按钮（请先停在据点布阵页）";
+        return result;
+      }
+      result.label = visibleText(btn);
+      btn.click();
+      result.ok = true;
+    } catch (e) {
+      result.ok = false;
+      result.error = String((e && e.message) || e);
+    }
+    return result;
+  }
+
+  function openKeypoint(operationId, keypointId) {
+    const result = { ok: false, method: null, error: null, href: location.href };
+    try {
+      if (!operationId || !keypointId) {
+        result.error = "缺少行动或据点 id";
+        return result;
+      }
+      const href = location.href || "";
+      if (href.indexOf(operationId) >= 0 && href.indexOf(keypointId) >= 0) {
+        result.ok = true;
+        result.method = "already";
+        return result;
+      }
+      const anchors = document.querySelectorAll("a[href]");
+      for (const a of anchors) {
+        const h = a.getAttribute("href") || "";
+        const label = visibleText(a);
+        if (PAY_OR_SETTINGS.test(label) || PAY_OR_SETTINGS.test(h)) continue;
+        if (h.indexOf(keypointId) >= 0 && (h.indexOf(operationId) >= 0 || h.indexOf("/operations/") >= 0)) {
+          a.click();
+          result.ok = true;
+          result.method = "anchor";
+          result.href = location.href;
+          return result;
+        }
+      }
+      let marked = null;
+      try {
+        marked = document.querySelector(
+          '[data-keypoint-id="' + keypointId + '"], [data-id="' + keypointId + '"]'
+        );
+      } catch (_) {}
+      if (marked) {
+        const label = visibleText(marked);
+        if (!PAY_OR_SETTINGS.test(label)) {
+          const host = marked.closest("a,button,[role='button']") || marked;
+          host.click();
+          result.ok = true;
+          result.method = "data-id";
+          result.href = location.href;
+          return result;
+        }
+      }
+      const u = new URL(location.href);
+      const replaced = u.pathname.replace(
+        /\/operations\/[^/]+\/[^/]+/,
+        "/operations/" + operationId + "/" + keypointId
+      );
+      if (replaced !== u.pathname) {
+        history.pushState({}, "", replaced + u.search + u.hash);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+        result.ok = true;
+        result.method = "history";
+        result.href = location.href;
+        return result;
+      }
+      result.error =
+        "无法在不刷新页面的情况下切到该据点。请手动点开据点；若整页刷新，需要在 F12 重新粘贴注入脚本。";
+    } catch (e) {
+      result.ok = false;
+      result.error = String((e && e.message) || e);
+    }
+    return result;
+  }
+
   async function scrapeAll() {
     const scrapeErrors = [];
     const settings = await api("/api/v2/settings/");
@@ -310,6 +496,25 @@
     }
 
     const locale = pullLocale();
+    let operations = [];
+    try {
+      operations = collectLobby(state);
+      const opUn = operation ? unwrap(operation) : null;
+      if (opUn && opUn.id && !operations.some((o) => o.id === opUn.id)) {
+        const sum = asOpSummary(opUn);
+        operations.push(
+          sum || {
+            id: opUn.id,
+            name: opUn.name || "",
+            status: "active",
+            completed: false,
+            index: opUn.index != null ? opUn.index : null,
+          }
+        );
+      }
+    } catch (e) {
+      console.warn("[PFHelper] lobby collect failed", e);
+    }
     const snap = {
       type: "snapshot",
       settings,
@@ -317,6 +522,7 @@
       state,
       operation,
       keypoint,
+      operations,
       locale,
       meta: {
         operationId,
@@ -910,6 +1116,51 @@
             keypointId: placed.keypointId,
           },
         });
+        return;
+      }
+      // Automation-only. Manual deploy above still does not start a battle.
+      if (msg.type === "open_keypoint") {
+        const opened = openKeypoint(msg.operationId, msg.keypointId);
+        console.info("[PFHelper] openKeypoint", opened);
+        this.send({
+          type: "auto_result",
+          action: "open_keypoint",
+          ok: !!opened.ok,
+          error: opened.error || null,
+          detail: opened,
+        });
+        return;
+      }
+      if (msg.type === "start_battle") {
+        const started = startBattle();
+        console.info("[PFHelper] startBattle", started);
+        this.send({
+          type: "auto_result",
+          action: "start_battle",
+          ok: !!started.ok,
+          error: started.error || null,
+          detail: started,
+        });
+        return;
+      }
+      if (msg.type === "fetch_operation") {
+        try {
+          const data = await api("/api/v2/operation/" + msg.operationId + "/");
+          this.send({
+            type: "auto_result",
+            action: "fetch_operation",
+            ok: true,
+            operation: unwrap(data),
+          });
+        } catch (e) {
+          this.send({
+            type: "auto_result",
+            action: "fetch_operation",
+            ok: false,
+            error: String((e && e.message) || e),
+          });
+        }
+        return;
       }
     },
     scrape: () => helper.doScrape(),
@@ -925,6 +1176,6 @@
     "[PFHelper] ready ·",
     PF_INJECT_VERSION,
     "· port=" + PORT,
-    "· never auto-fights · redux place"
+    "· manual place does not fight · automation may click 战斗"
   );
 })();

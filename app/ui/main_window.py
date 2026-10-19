@@ -14,10 +14,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from ..auto_session import AutoSession
 from ..bridge.server import BridgeServer
 from ..cdp_attach import GAME_HOME_URL, launch_ie, one_click_connect
 from ..logutil import get_logger
@@ -32,6 +34,7 @@ from ..worker import (
     solution_to_deploy_slots,
     start_solve_thread,
 )
+from .auto_widgets import AutoProgressPanel, AutoSummaryDialog
 from .formation_card import FormationCard
 from .mod_filter_dialog import ModFilterDialog
 from .resize_helper import ResizeHelper
@@ -135,6 +138,12 @@ class MainWindow(QWidget):
         self._solve_last_msg: str = ""
         self._cards_collapsed: bool = True  # default: all cards folded
         self._pulse_on = False
+        self._auto_session: AutoSession | None = None
+        self._auto_active = False
+        self._closing = False
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(1000)
+        self._auto_timer.timeout.connect(self._tick_auto_elapsed)
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(400)
         self._elapsed_timer.timeout.connect(self._tick_elapsed)
@@ -203,6 +212,17 @@ class MainWindow(QWidget):
         fallback.addWidget(self.btn_fold_all, 1)
         panel_lay.addLayout(fallback)
 
+        auto_row = QHBoxLayout()
+        auto_row.setContentsMargins(8, 0, 8, 4)
+        self.btn_auto = QPushButton("自动化窝牌")
+        self.btn_auto.setObjectName("AutoBtn")
+        self.btn_auto.setMinimumHeight(34)
+        self.btn_auto.setMaximumHeight(34)
+        self.btn_auto.setToolTip("按规则选点、计算、放牌并开战。停止计算可中止并弹出汇总。")
+        self.btn_auto.clicked.connect(self._on_auto_play)
+        auto_row.addWidget(self.btn_auto)
+        panel_lay.addLayout(auto_row)
+
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -215,7 +235,12 @@ class MainWindow(QWidget):
         self.list_lay.setSpacing(6)
         self.list_lay.addStretch(1)
         self.scroll.setWidget(self.list_host)
-        panel_lay.addWidget(self.scroll, 1)
+        self.auto_panel = AutoProgressPanel()
+        self.view_stack = QStackedWidget()
+        self.view_stack.addWidget(self.scroll)
+        self.view_stack.addWidget(self.auto_panel)
+        self.view_stack.setCurrentIndex(0)
+        panel_lay.addWidget(self.view_stack, 1)
 
         # Fixed 2-line system-message strip ABOVE mode buttons (never shrinks)
         self.sys_msg = QLabel("未启动桥接")
@@ -261,7 +286,7 @@ class MainWindow(QWidget):
         self.btn_mods.clicked.connect(self._open_mod_filter)
         self.btn_stop = QPushButton("停止计算")
         self.btn_stop.setObjectName("StopBtn")
-        self.btn_stop.setToolTip("终止当前求解")
+        self.btn_stop.setToolTip("终止当前求解，或终止自动化窝牌并弹出汇总")
         self.btn_stop.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_stop.setFixedSize(68, _side_h)
         self.btn_stop.setEnabled(False)
@@ -377,6 +402,7 @@ class MainWindow(QWidget):
             self._bridge.signals.snapshot_received.connect(self._on_snapshot)
             self._bridge.signals.deploy_result.connect(self._on_deploy_result)
             self._bridge.signals.deploy_plan.connect(self._on_deploy_plan)
+            self._bridge.signals.auto_result.connect(self._on_auto_result)
             self._bridge.signals.status.connect(self._set_status)
             self._bridge.signals.error.connect(self._on_bridge_error)
             self._bridge.start()
@@ -513,6 +539,15 @@ class MainWindow(QWidget):
             log.info("scrape requested")
 
     def _on_snapshot(self, data: dict):
+        if self._auto_active and self._auto_session is not None:
+            self._auto_session.notify_snapshot(data)
+            self.snapshot = data
+            try:
+                self.scenario = build_scenario_from_snapshot(data)
+                persist_snapshot(data, self.scenario)
+            except Exception:
+                log.exception("auto snapshot parse")
+            return
         pending_mode = self._pending_solve_mode
         try:
             self.snapshot = data
@@ -674,13 +709,27 @@ class MainWindow(QWidget):
             thread.deleteLater()
 
     def _set_solving(self, busy: bool):
-        for b in (self.btn_no, self.btn_items, self.btn_mods, self.btn_scrape):
+        for b in (self.btn_no, self.btn_items, self.btn_mods, self.btn_scrape, self.btn_auto):
             b.setEnabled(not busy)
         if hasattr(self, "btn_stop"):
             self.btn_stop.setEnabled(bool(busy))
 
     def _stop_solve(self):
-        """User-requested abort of the running solve worker."""
+        """Abort the running manual solve, and automation if it is running.
+
+        Stopping automation uses the same button and still raises the summary.
+        """
+        if self._auto_active and self._auto_session is not None:
+            self._auto_session.cancel()
+            w = self._solve_worker
+            if w is not None:
+                try:
+                    w.cancel()
+                except Exception:
+                    pass
+            self._set_status("正在停止自动化…")
+            log.info("auto stop requested")
+            return
         w = self._solve_worker
         if w is None:
             return
@@ -934,7 +983,21 @@ class MainWindow(QWidget):
         if t is not None:
             t.deleteLater()
 
+    def _on_auto_result(self, data: dict):
+        if self._auto_active and self._auto_session is not None:
+            self._auto_session.notify_auto(data)
+
     def _on_deploy_result(self, data: dict):
+        if self._auto_active and self._auto_session is not None:
+            self._auto_session.notify_deploy(data)
+            ok = bool(data.get("ok"))
+            if ok:
+                self._set_status("自动化放牌完成，准备开战")
+            else:
+                detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+                err = detail.get("error") or data.get("error") or "放牌失败"
+                self._set_status(f"自动化放牌失败: {err}")
+            return
         detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
         note = str(detail.get("note") or "")
         method = str(data.get("method") or detail.get("method") or "")
@@ -967,6 +1030,91 @@ class MainWindow(QWidget):
         msg = err or "代码放牌失败（未知原因）"
         self._set_status(f"放牌失败: {msg}")
         self._alert(f"放牌失败: {msg}")
+
+    # ----- automation -----
+    def _on_auto_play(self):
+        """Start the full auto loop: pick, solve, place, and start the battle."""
+        if self._auto_active:
+            self._toast("自动化已在运行，可点「停止计算」中止")
+            return
+        if self._solve_thread and self._solve_thread.isRunning():
+            self._toast("请先停止当前计算")
+            return
+        if self._pending_solve_mode:
+            self._toast("正在采数，请稍候…")
+            return
+        self._ensure_bridge()
+        if not self._bridge or self._bridge.client_count <= 0:
+            self._alert("尚未连接游戏页。请先点「复制注入脚本」，在游戏页 F12 粘贴。")
+            return
+        self._auto_session = AutoSession(self._bridge, self.settings)
+        self._auto_session.progress.connect(self._on_auto_progress)
+        self._auto_session.solve_progress.connect(self._on_auto_solve_progress)
+        self._auto_session.status.connect(self._set_status)
+        self._auto_session.finished_summary.connect(self._on_auto_finished)
+        self._auto_active = True
+        self._set_solving(True)
+        self.view_stack.setCurrentWidget(self.auto_panel)
+        self.auto_panel.update_info({
+            "name": "读取行动…",
+            "enemy_power": None,
+            "reason": "",
+            "step": "正在刷新据点与 buff 缓存",
+            "lobby": {"ops_done": 0, "ops_total": 3, "cleared_kp": 0, "total_kp": 0},
+            "token_full": 0,
+            "token_missed": 0,
+        })
+        self.auto_panel.set_elapsed(0)
+        self._auto_timer.start()
+        self._set_status("自动化窝牌运行中")
+        log.info("auto play start")
+        if not self._auto_session.start():
+            self._auto_active = False
+            self._set_solving(False)
+            self._auto_timer.stop()
+            self.view_stack.setCurrentWidget(self.scroll)
+            self._alert("自动化未能启动")
+
+    def _tick_auto_elapsed(self):
+        if not self._auto_active or self._auto_session is None:
+            return
+        self.auto_panel.set_elapsed(self._auto_session.elapsed())
+
+    def _on_auto_progress(self, info: dict):
+        if not self._auto_active:
+            return
+        self.auto_panel.update_info(info or {})
+        step = str((info or {}).get("step") or "")
+        if step:
+            self._set_status(step[:80])
+
+    def _on_auto_solve_progress(self, msg: str, pct: int):
+        if not self._auto_active:
+            return
+        self._set_status((msg or "计算中")[:80])
+        if pct is None or int(pct) < 0:
+            self._show_progress_indeterminate(msg or "计算中")
+        else:
+            self._set_progress_pct(int(pct), (msg or "")[:28] or f"{int(pct)}%")
+
+    def _on_auto_finished(self, summary: dict):
+        self._auto_active = False
+        self._auto_timer.stop()
+        self._set_solving(False)
+        self._reset_progress_bar()
+        self.view_stack.setCurrentWidget(self.scroll)
+        if self._closing:
+            self._auto_session = None
+            return
+        reason = str((summary or {}).get("reason") or "结束")
+        elapsed = float((summary or {}).get("elapsed_sec") or 0)
+        self._set_status(f"自动化{reason} · {int(elapsed)} 秒")
+        log.info("auto finished reason=%s", reason)
+        dlg = AutoSummaryDialog(summary or {}, self)
+        if bool(self.windowFlags() & Qt.WindowStaysOnTopHint):
+            dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dlg.exec()
+        self._auto_session = None
 
     # ----- mod filter -----
     def _open_mod_filter(self):
@@ -1101,7 +1249,14 @@ class MainWindow(QWidget):
         QTimer.singleShot(0, self._try_acrylic)
 
     def closeEvent(self, event):
+        self._closing = True
         log.info("main window closing")
+        if self._auto_session is not None:
+            try:
+                self._auto_session.cancel()
+            except Exception:
+                pass
+            self._auto_active = False
         if self._bridge:
             try:
                 self._bridge.stop()
