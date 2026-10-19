@@ -7,6 +7,8 @@ import time as _time
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -212,17 +214,6 @@ class MainWindow(QWidget):
         fallback.addWidget(self.btn_fold_all, 1)
         panel_lay.addLayout(fallback)
 
-        auto_row = QHBoxLayout()
-        auto_row.setContentsMargins(8, 0, 8, 4)
-        self.btn_auto = QPushButton("自动化窝牌")
-        self.btn_auto.setObjectName("AutoBtn")
-        self.btn_auto.setMinimumHeight(34)
-        self.btn_auto.setMaximumHeight(34)
-        self.btn_auto.setToolTip("按规则选点、计算、放牌并开战。停止计算可中止并弹出汇总。")
-        self.btn_auto.clicked.connect(self._on_auto_play)
-        auto_row.addWidget(self.btn_auto)
-        panel_lay.addLayout(auto_row)
-
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -246,24 +237,39 @@ class MainWindow(QWidget):
         self.sys_msg = QLabel("未启动桥接")
         self.sys_msg.setObjectName("StatusLine")
         self.sys_msg.setWordWrap(True)
-        # ~2 lines at 12px + padding; fixed so long text / many results cannot crush it
-        _sys_h = 40
+        # Two lines of text; never elide with "..."
+        try:
+            self.sys_msg.setTextElideMode(Qt.TextElideMode.ElideNone)
+        except Exception:
+            try:
+                self.sys_msg.setTextElideMode(Qt.ElideNone)
+            except Exception:
+                pass
+        # ~2 lines at 12px + padding (was too short → looked like one line / "...")
+        _sys_h = 48
         self.sys_msg.setFixedHeight(_sys_h)
         self.sys_msg.setMinimumHeight(_sys_h)
         self.sys_msg.setMaximumHeight(_sys_h)
         self.sys_msg.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.sys_msg.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.sys_msg.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.sys_msg.setTextInteractionFlags(Qt.TextSelectableByMouse)
         panel_lay.addWidget(self.sys_msg)
 
         bottom = QHBoxLayout()
         bottom.setContentsMargins(8, 6, 8, 4)
         bottom.setSpacing(6)
-        # Side stack: 道具 (top) + 停止计算 (bottom), compact text-hugging height.
-        # Mode buttons match the stack total height so the row lines up.
-        _side_h = 20
-        _side_gap = 4
-        _mode_h = _side_h * 2 + _side_gap
+        # Left: 计算按钮恢复原高度 44；下方「自动化窝牌」等宽；
+        # 右侧道具/停止各为 (计算+自动化) 高度之和的一半
+        _calc_h = 44
+        _auto_h = 22
+        _row_gap = 4
+        _side_h = (_calc_h + _auto_h) // 2  # 33
+        left_col = QVBoxLayout()
+        left_col.setContentsMargins(0, 0, 0, 0)
+        left_col.setSpacing(_row_gap)
+        row_calc = QHBoxLayout()
+        row_calc.setContentsMargins(0, 0, 0, 0)
+        row_calc.setSpacing(6)
         self.btn_no = QPushButton("无道具计算")
         self.btn_items = QPushButton("带道具计算")
         for b, mode in (
@@ -272,12 +278,21 @@ class MainWindow(QWidget):
         ):
             b.setObjectName("ModeBtn")
             b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            b.setFixedHeight(_mode_h)
+            b.setFixedHeight(_calc_h)
             b.clicked.connect(lambda checked=False, m=mode: self._start_solve(m))
-            bottom.addWidget(b)
+            row_calc.addWidget(b)
+        left_col.addLayout(row_calc)
+        self.btn_auto = QPushButton("自动化窝牌")
+        self.btn_auto.setObjectName("AutoBtn")
+        self.btn_auto.setToolTip("按规则选点、计算、放牌并开战。停止计算可中止并弹出汇总。")
+        self.btn_auto.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.btn_auto.setFixedHeight(_auto_h)
+        self.btn_auto.clicked.connect(self._on_auto_play)
+        left_col.addWidget(self.btn_auto)
+        bottom.addLayout(left_col, 1)
         side = QVBoxLayout()
         side.setContentsMargins(0, 0, 0, 0)
-        side.setSpacing(_side_gap)
+        side.setSpacing(_row_gap)
         self.btn_mods = QPushButton("道具")
         self.btn_mods.setObjectName("ModFilterBtn")
         self.btn_mods.setToolTip("筛选「带道具计算」要穷尽的战斗道具（默认全选）")
@@ -286,7 +301,7 @@ class MainWindow(QWidget):
         self.btn_mods.clicked.connect(self._open_mod_filter)
         self.btn_stop = QPushButton("停止计算")
         self.btn_stop.setObjectName("StopBtn")
-        self.btn_stop.setToolTip("终止当前求解，或终止自动化窝牌并弹出汇总")
+        self.btn_stop.setToolTip("终止当前求解或自动化（停止后弹出汇总）")
         self.btn_stop.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_stop.setFixedSize(68, _side_h)
         self.btn_stop.setEnabled(False)
@@ -454,7 +469,148 @@ class MainWindow(QWidget):
         self._set_status(f"桥接错误: {msg}")
 
     def _on_one_click(self):
-        """Open the official game website (IE preferred; fallback to default browser)."""
+        """Open the official game website immediately; tip is informational only."""
+        self._open_game_site()
+        if bool(getattr(self.settings, "show_open_tip", True)):
+            self._confirm_open_browser_tip()
+
+    def _confirm_open_browser_tip(self) -> bool:
+        """Show browser tip (frameless dark); Persist「不再显示」."""
+        tip = (
+            "推荐使用自己常用的浏览器开启活动页面（优先使用谷歌Chrome），"
+            "IE浏览器可能会出现问题。成功登入并正常进入活动页面后请点击"
+            "「复制注入脚本」按钮，在活动页面按F12进入控制台进行注入。"
+        )
+        dlg = QDialog(self)
+        dlg.setObjectName("OpenTipDialog")
+        dlg.setModal(True)
+        flags = Qt.FramelessWindowHint | Qt.Dialog
+        if bool(self.windowFlags() & Qt.WindowStaysOnTopHint):
+            flags |= Qt.WindowStaysOnTopHint
+        dlg.setWindowFlags(flags)
+        dlg.setAttribute(Qt.WA_TranslucentBackground, True)
+        dlg.setStyleSheet("QDialog#OpenTipDialog { background: transparent; }")
+
+        outer = QVBoxLayout(dlg)
+        outer.setContentsMargins(0, 0, 0, 0)
+        panel = QFrame()
+        panel.setObjectName("OpenTipPanel")
+        panel.setStyleSheet(
+            "QFrame#OpenTipPanel {"
+            "  background-color: rgba(32, 32, 36, 245);"
+            "  border: 1px solid rgba(160, 160, 175, 0.35);"
+            "  border-radius: 10px;"
+            "}"
+            "QLabel#OpenTipTitle {"
+            "  color: #f5f5f8;"
+            "  font-size: 15px;"
+            "  font-weight: 700;"
+            "  background: transparent;"
+            "}"
+            "QLabel#OpenTipBody {"
+            "  color: #f0f0f4;"
+            "  font-size: 14px;"
+            "  background: transparent;"
+            "  line-height: 1.45;"
+            "}"
+            "QCheckBox#OpenTipChk {"
+            "  color: #e8e8ee;"
+            "  font-size: 13px;"
+            "  background: transparent;"
+            "  spacing: 8px;"
+            "}"
+            "QCheckBox#OpenTipChk::indicator {"
+            "  width: 16px; height: 16px;"
+            "  border: 1px solid #8a8a98;"
+            "  border-radius: 3px;"
+            "  background: #1c1c1f;"
+            "}"
+            "QCheckBox#OpenTipChk::indicator:checked {"
+            "  background: #5a8fd4;"
+            "  border: 1px solid #8ab4f8;"
+            "}"
+            "QPushButton#OpenTipClose {"
+            "  min-height: 40px;"
+            "  max-height: 40px;"
+            "  min-width: 140px;"
+            "  font-size: 15px;"
+            "  font-weight: 700;"
+            "  background-color: rgba(55, 105, 190, 230);"
+            "  border: 1px solid rgba(120,170,255,0.5);"
+            "  border-radius: 6px;"
+            "  color: #f2f6ff;"
+            "  padding: 0 24px;"
+            "}"
+            "QPushButton#OpenTipClose:hover {"
+            "  background-color: rgba(70, 125, 210, 240);"
+            "}"
+            "QPushButton#OpenTipClose:pressed {"
+            "  background-color: rgba(40, 85, 160, 245);"
+            "}"
+        )
+        outer.addWidget(panel)
+
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(22, 18, 22, 18)
+        lay.setSpacing(14)
+
+        title = QLabel("开启提示")
+        title.setObjectName("OpenTipTitle")
+        title.setAlignment(Qt.AlignCenter)
+        lay.addWidget(title)
+
+        lab = QLabel(tip)
+        lab.setObjectName("OpenTipBody")
+        lab.setWordWrap(True)
+        lab.setMinimumWidth(400)
+        lab.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        lay.addWidget(lab)
+
+        chk = QCheckBox("以后打开软件点此按钮不再显示此提示")
+        chk.setObjectName("OpenTipChk")
+        lay.addWidget(chk)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_close = QPushButton("关闭")
+        btn_close.setObjectName("OpenTipClose")
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_close)
+        btn_row.addStretch(1)
+        lay.addLayout(btn_row)
+
+        dlg.adjustSize()
+        # center over main window
+        try:
+            g = self.frameGeometry()
+            dg = dlg.frameGeometry()
+            dlg.move(
+                g.center().x() - dg.width() // 2,
+                g.center().y() - dg.height() // 2,
+            )
+        except Exception:
+            pass
+
+        dlg.exec()
+        if chk.isChecked():
+            self.settings.show_open_tip = False
+            try:
+                save_settings(self.settings)
+            except Exception:
+                log.exception("save show_open_tip")
+            sd = self._settings_dlg
+            if sd is not None and hasattr(sd, "chk_open_tip"):
+                try:
+                    sd.chk_open_tip.blockSignals(True)
+                    sd.chk_open_tip.setChecked(False)
+                    sd.chk_open_tip.blockSignals(False)
+                    sd._settings = self.settings
+                except Exception:
+                    pass
+        return True
+
+    def _open_game_site(self):
         self._ensure_bridge()
         url = GAME_HOME_URL
         opened = None
@@ -1031,91 +1187,6 @@ class MainWindow(QWidget):
         self._set_status(f"放牌失败: {msg}")
         self._alert(f"放牌失败: {msg}")
 
-    # ----- automation -----
-    def _on_auto_play(self):
-        """Start the full auto loop: pick, solve, place, and start the battle."""
-        if self._auto_active:
-            self._toast("自动化已在运行，可点「停止计算」中止")
-            return
-        if self._solve_thread and self._solve_thread.isRunning():
-            self._toast("请先停止当前计算")
-            return
-        if self._pending_solve_mode:
-            self._toast("正在采数，请稍候…")
-            return
-        self._ensure_bridge()
-        if not self._bridge or self._bridge.client_count <= 0:
-            self._alert("尚未连接游戏页。请先点「复制注入脚本」，在游戏页 F12 粘贴。")
-            return
-        self._auto_session = AutoSession(self._bridge, self.settings)
-        self._auto_session.progress.connect(self._on_auto_progress)
-        self._auto_session.solve_progress.connect(self._on_auto_solve_progress)
-        self._auto_session.status.connect(self._set_status)
-        self._auto_session.finished_summary.connect(self._on_auto_finished)
-        self._auto_active = True
-        self._set_solving(True)
-        self.view_stack.setCurrentWidget(self.auto_panel)
-        self.auto_panel.update_info({
-            "name": "读取行动…",
-            "enemy_power": None,
-            "reason": "",
-            "step": "正在刷新据点与 buff 缓存",
-            "lobby": {"ops_done": 0, "ops_total": 3, "cleared_kp": 0, "total_kp": 0},
-            "token_full": 0,
-            "token_missed": 0,
-        })
-        self.auto_panel.set_elapsed(0)
-        self._auto_timer.start()
-        self._set_status("自动化窝牌运行中")
-        log.info("auto play start")
-        if not self._auto_session.start():
-            self._auto_active = False
-            self._set_solving(False)
-            self._auto_timer.stop()
-            self.view_stack.setCurrentWidget(self.scroll)
-            self._alert("自动化未能启动")
-
-    def _tick_auto_elapsed(self):
-        if not self._auto_active or self._auto_session is None:
-            return
-        self.auto_panel.set_elapsed(self._auto_session.elapsed())
-
-    def _on_auto_progress(self, info: dict):
-        if not self._auto_active:
-            return
-        self.auto_panel.update_info(info or {})
-        step = str((info or {}).get("step") or "")
-        if step:
-            self._set_status(step[:80])
-
-    def _on_auto_solve_progress(self, msg: str, pct: int):
-        if not self._auto_active:
-            return
-        self._set_status((msg or "计算中")[:80])
-        if pct is None or int(pct) < 0:
-            self._show_progress_indeterminate(msg or "计算中")
-        else:
-            self._set_progress_pct(int(pct), (msg or "")[:28] or f"{int(pct)}%")
-
-    def _on_auto_finished(self, summary: dict):
-        self._auto_active = False
-        self._auto_timer.stop()
-        self._set_solving(False)
-        self._reset_progress_bar()
-        self.view_stack.setCurrentWidget(self.scroll)
-        if self._closing:
-            self._auto_session = None
-            return
-        reason = str((summary or {}).get("reason") or "结束")
-        elapsed = float((summary or {}).get("elapsed_sec") or 0)
-        self._set_status(f"自动化{reason} · {int(elapsed)} 秒")
-        log.info("auto finished reason=%s", reason)
-        dlg = AutoSummaryDialog(summary or {}, self)
-        if bool(self.windowFlags() & Qt.WindowStaysOnTopHint):
-            dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-        dlg.exec()
-        self._auto_session = None
-
     # ----- mod filter -----
     def _open_mod_filter(self):
         # Second click on 道具 closes; button is not checkable (no pressed look)
@@ -1212,9 +1283,94 @@ class MainWindow(QWidget):
             except Exception:
                 log.exception("load last scenario")
 
+    def _on_auto_play(self):
+        """Start the full auto loop: pick, solve, place, and start the battle."""
+        if self._auto_active:
+            self._toast("自动化已在运行，可点「停止计算」中止")
+            return
+        if self._solve_thread and self._solve_thread.isRunning():
+            self._toast("请先停止当前计算")
+            return
+        if self._pending_solve_mode:
+            self._toast("正在采数，请稍候…")
+            return
+        self._ensure_bridge()
+        if not self._bridge or self._bridge.client_count <= 0:
+            self._alert("尚未连接游戏页。请先点「复制注入脚本」，在游戏页 F12 粘贴。")
+            return
+        self._auto_session = AutoSession(self._bridge, self.settings)
+        self._auto_session.progress.connect(self._on_auto_progress)
+        self._auto_session.solve_progress.connect(self._on_auto_solve_progress)
+        self._auto_session.status.connect(self._set_status)
+        self._auto_session.finished_summary.connect(self._on_auto_finished)
+        self._auto_active = True
+        self._set_solving(True)
+        self.view_stack.setCurrentWidget(self.auto_panel)
+        self.auto_panel.update_info({
+            "name": "读取行动…",
+            "enemy_power": None,
+            "reason": "",
+            "step": "正在刷新据点与 buff 缓存",
+            "lobby": {"ops_done": 0, "ops_total": 3, "cleared_kp": 0, "total_kp": 0},
+            "token_full": 0,
+            "token_missed": 0,
+        })
+        self.auto_panel.set_elapsed(0)
+        self._auto_timer.start()
+        self._set_status("自动化窝牌运行中")
+        log.info("auto play start")
+        if not self._auto_session.start():
+            self._auto_active = False
+            self._set_solving(False)
+            self._auto_timer.stop()
+            self.view_stack.setCurrentWidget(self.scroll)
+            self._alert("自动化未能启动")
+
+    def _tick_auto_elapsed(self):
+        if not self._auto_active or self._auto_session is None:
+            return
+        self.auto_panel.set_elapsed(self._auto_session.elapsed())
+
+    def _on_auto_progress(self, info: dict):
+        if not self._auto_active:
+            return
+        self.auto_panel.update_info(info or {})
+        step = str((info or {}).get("step") or "")
+        if step:
+            self._set_status(step[:80])
+
+    def _on_auto_solve_progress(self, msg: str, pct: int):
+        if not self._auto_active:
+            return
+        self._set_status((msg or "计算中")[:80])
+        if pct is None or int(pct) < 0:
+            self._show_progress_indeterminate(msg or "计算中")
+        else:
+            self._set_progress_pct(int(pct), (msg or "")[:28] or f"{int(pct)}%")
+
+    def _on_auto_finished(self, summary: dict):
+        self._auto_active = False
+        self._auto_timer.stop()
+        self._set_solving(False)
+        self._reset_progress_bar()
+        self.view_stack.setCurrentWidget(self.scroll)
+        if self._closing:
+            self._auto_session = None
+            return
+        reason = str((summary or {}).get("reason") or "结束")
+        elapsed = float((summary or {}).get("elapsed_sec") or 0)
+        self._set_status(f"自动化{reason} · {int(elapsed)} 秒")
+        log.info("auto finished reason=%s", reason)
+        dlg = AutoSummaryDialog(summary or {}, self)
+        if bool(self.windowFlags() & Qt.WindowStaysOnTopHint):
+            dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        dlg.exec()
+        self._auto_session = None
+
     def _alert(self, text: str):
-        # First line goes to the fixed sys_msg strip; modal for detail
-        self.sys_msg.setText((text or "").split("\n")[0][:80])
+        # Full first paragraph into the strip (no hard [:80] cut); hover shows all
+        first = (text or "").split("\n")[0].strip()
+        self._set_status(first)
         QMessageBox.warning(self, "提示", text)
 
     def _place_window_right(self) -> None:

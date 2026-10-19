@@ -70,13 +70,30 @@ QPushButton:disabled {
     background-color: rgba(40,40,45,160);
 }
 QPushButton#ModeBtn {
-    min-height: 44px;
-    max-height: 44px;
     font-weight: 600;
+    font-size: 12px;
+}
+QPushButton#AutoBtn {
+    font-weight: 700;
+    font-size: 12px;
+    background-color: rgba(175, 135, 35, 225);
+    color: #fff6d8;
+    border: 1px solid rgba(230, 190, 70, 0.55);
+}
+QPushButton#AutoBtn:hover {
+    background-color: rgba(190, 150, 45, 235);
+    border: 1px solid rgba(240, 205, 90, 0.65);
+    color: #fffcef;
+}
+QPushButton#AutoBtn:pressed {
+    background-color: rgba(145, 110, 25, 240);
+}
+QPushButton#AutoBtn:disabled {
+    background-color: rgba(70, 60, 35, 160);
+    color: #998;
+    border: 1px solid rgba(120, 100, 50, 0.3);
 }
 QPushButton#ModFilterBtn {
-    min-height: 20px;
-    max-height: 20px;
     min-width: 64px;
     max-width: 72px;
     font-weight: 600;
@@ -96,8 +113,6 @@ QPushButton#ModFilterBtn:pressed {
     background-color: rgba(30, 42, 44, 220);
 }
 QPushButton#StopBtn {
-    min-height: 20px;
-    max-height: 20px;
     min-width: 64px;
     max-width: 72px;
     font-weight: 700;
@@ -119,26 +134,6 @@ QPushButton#StopBtn:disabled {
     background-color: rgba(60, 40, 40, 160);
     color: #988;
     border: 1px solid rgba(120, 80, 80, 0.3);
-}
-QPushButton#AutoBtn {
-    min-height: 34px;
-    max-height: 34px;
-    font-weight: 700;
-    font-size: 13px;
-    background-color: rgba(232, 184, 48, 235);
-    color: #1c1404;
-    border: 1px solid rgba(255, 220, 120, 0.75);
-}
-QPushButton#AutoBtn:hover {
-    background-color: rgba(232, 184, 48, 235);
-}
-QPushButton#AutoBtn:pressed {
-    background-color: rgba(196, 150, 30, 240);
-}
-QPushButton#AutoBtn:disabled {
-    background-color: rgba(120, 100, 40, 160);
-    color: #3a3424;
-    border: 1px solid rgba(180, 150, 60, 0.25);
 }
 QPushButton#PrimaryBtn {
     min-height: 34px;
@@ -210,13 +205,13 @@ QFrame#FormationCard QLabel {
     color: #e4e4ea;
     background: transparent;
 }
-QLabel#OverflowPos { color: #5dce8a; font-weight: 600; }
-QLabel#OverflowNeg { color: #e07070; font-weight: 600; }
+QLabel#OverflowPos { color: #e07070; font-weight: 600; }  /* ≥0 红 */
+QLabel#OverflowNeg { color: #5dce8a; font-weight: 600; }  /* <0 绿 */
 QLabel#StatusLine {
     color: #a8a8b0;
-    padding: 4px 8px;
-    min-height: 32px;
-    max-height: 40px;
+    padding: 2px 8px;
+    min-height: 40px;
+    max-height: 52px;
     font-size: 12px;
 }
 QLabel#TagCertain {
@@ -330,5 +325,25 @@ QSlider::handle:horizontal {
 }
 QFormLayout {
     color: #e8e8ea;
+}
+QCheckBox {
+    color: #f0f0f4;
+    background: transparent;
+    font-size: 13px;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #7a7a88;
+    border-radius: 3px;
+    background: #1c1c1f;
+}
+QCheckBox::indicator:checked {
+    background: #5a8fd4;
+    border: 1px solid #8ab4f8;
+}
+QCheckBox::indicator:hover {
+    border: 1px solid #a0b8e0;
 }
 """

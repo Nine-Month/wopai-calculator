@@ -22,7 +22,7 @@ from .items_solve import (
     pick_boss_lane,
     solve_mode,
 )
-from .solver import Ship, evaluate, filter_pool, parse_scenario, solve
+from .solver import Ship, evaluate, filter_pool, lane_win_pct, parse_scenario, solve
 
 # Top combined-win decks used by the purchasable passes. Fixed at 50 unless the
 # caller passes another positive cap (settings cache_count is a floor for the
@@ -65,12 +65,18 @@ def is_full_win(sol: dict | None) -> bool:
 
 
 def annotate_win(sol: dict) -> dict:
-    """Fill combined / minimum lane win% from power bands when missing."""
-    pcts: list[float] = []
+    """Fill combined / minimum lane win% with the same discrete formula as the UI.
+
+    综合 = 四路胜率加总/4（空位按 0%）；最低 = 已放牌各路中的最小胜率。
+    """
+    four: list[float] = []
+    filled: list[float] = []
     min_ship = ""
     min_wp: float | None = None
-    for slot in sol.get("slots") or []:
+    for i, slot in enumerate(sol.get("slots") or []):
         if slot.get("status") == "empty":
+            if i < 4:
+                four.append(0.0)
             continue
         band = slot.get("power_band") or [0, 0]
         try:
@@ -79,27 +85,19 @@ def annotate_win(sol: dict) -> dict:
             enemy = float(slot.get("enemy_power") or 0)
         except (TypeError, ValueError):
             lo, hi, enemy = 0.0, 0.0, 0.0
-        if hi <= lo:
-            wp = 100.0 if enemy <= lo else 0.0
-        elif enemy <= lo:
-            wp = 100.0
-        elif enemy >= hi:
-            wp = 0.0
-        else:
-            wp = (hi - enemy) / (hi - lo) * 100.0
+        wp = lane_win_pct(lo, hi, enemy)
         slot["win_pct"] = round(wp, 1)
-        pcts.append(wp)
+        if i < 4:
+            four.append(wp)
+        filled.append(wp)
         if min_wp is None or wp < min_wp:
             min_wp = wp
             min_ship = str(slot.get("ship") or "")
-    if pcts:
-        sol["win_rate_avg"] = round(sum(pcts) / len(pcts), 1)
-        sol["win_rate_min"] = round(min(pcts), 1)
-        sol["win_rate_min_ship"] = min_ship
-    else:
-        sol.setdefault("win_rate_avg", 0.0)
-        sol.setdefault("win_rate_min", 0.0)
-        sol.setdefault("win_rate_min_ship", "")
+    while len(four) < 4:
+        four.append(0.0)
+    sol["win_rate_avg"] = round(sum(four[:4]) / 4.0, 1)
+    sol["win_rate_min"] = round(min(filled), 1) if filled else 0.0
+    sol["win_rate_min_ship"] = min_ship
     sol.setdefault("supply_spent", 0)
     sol.setdefault("lane_mods", [list(s.get("mods") or []) for s in (sol.get("slots") or [])])
     return sol

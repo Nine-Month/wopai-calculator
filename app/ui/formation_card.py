@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 )
 
 from ..mod_names import mods_label
-from ..worker import MODE_LABELS
 from .formation_hover import shared_hover_tip
 
 
@@ -32,10 +31,11 @@ def win_rate_color(pct) -> str:
 
 
 def _fmt_pct(v) -> str:
+    """Right-align percent so 综合/最低 digits line up across cards."""
     try:
-        return f"{float(v):.0f}%"
+        return f"{float(v):>3.0f}%"
     except Exception:
-        return "—"
+        return "  —%"
 
 
 def _total_overflow(sol: dict) -> float:
@@ -76,8 +76,6 @@ class FormationCard(QFrame):
 
         head = QHBoxLayout()
         head.setSpacing(4)
-        mode = sol.get("_mode") or ""
-        mode_zh = MODE_LABELS.get(mode, mode)
         avg = sol.get("win_rate_avg")
         mn = sol.get("win_rate_min")
         if avg is None:
@@ -94,44 +92,48 @@ class FormationCard(QFrame):
         self._rank_l.setFixedWidth(28)
         self._rank_l.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._rank_l.setStyleSheet("color:#e8e8ea;background:transparent;")
-        self._mode_l = QLabel(mode_zh)
-        self._mode_l.setStyleSheet("color:#c8c8d0;background:transparent;")
-        self._tag = QLabel(tag_txt)
-        self._tag.setObjectName(tag_obj)
-        self._tag.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # No mode label (无道具/带道具) — it pushed the fold button off-window when expanded.
 
         tot = _total_overflow(sol)
-        # Win-rate color on tag / summary win-rate text (100 green → low red)
-        color_src = avg if avg is not None else (100.0 if sol.get("all_certain") else 50.0)
-        try:
-            color_src = float(mn if mn is not None and avg is not None else color_src)
-        except Exception:
-            color_src = 50.0
-        try:
-            wr = float(avg) if avg is not None else float(color_src)
-        except Exception:
-            wr = 50.0
-        wr_color = win_rate_color(wr)
-        # Collapsed summary only: overflow ≥100 → green; otherwise red (no mid gradient)
-        ov_color = win_rate_color(100.0 if float(tot) >= 100.0 else 0.0)
+        # 溢出：≥0 红，<0 绿
+        ov_color = win_rate_color(0.0 if float(tot) >= 0.0 else 100.0)
         if avg is None:
-            summary = (
+            fallback = 100.0 if sol.get("all_certain") else 50.0
+            wr_color = win_rate_color(fallback)
+            metrics_html = (
                 f'<span style="color:{wr_color}">{tag_txt}</span>'
                 f' · <span style="color:{ov_color}">溢出 {tot:+.0f}</span>'
             )
         else:
-            summary = (
-                f'<span style="color:{wr_color}">综合 {_fmt_pct(avg)}</span>'
+            try:
+                avg_f = float(avg)
+            except Exception:
+                avg_f = 50.0
+            try:
+                mn_f = float(mn) if mn is not None else avg_f
+            except Exception:
+                mn_f = avg_f
+            avg_color = win_rate_color(avg_f)
+            mn_color = win_rate_color(mn_f)
+            # 综合 / 最低 / 溢出 — same labels + padded % so digits align across cards
+            metrics_html = (
+                f'<span style="color:{avg_color}">综合 {_fmt_pct(avg_f)}</span>'
+                f' · <span style="color:{mn_color}">最低 {_fmt_pct(mn_f)}</span>'
                 f' · <span style="color:{ov_color}">溢出 {tot:+.0f}</span>'
             )
-        self._summary = QLabel(summary)
+
+        # Expanded tag + collapsed summary both show 综合 · 最低 · 溢出
+        self._tag = QLabel(metrics_html)
+        self._tag.setObjectName(tag_obj)
+        self._tag.setTextFormat(Qt.RichText)
+        self._tag.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._tag.setStyleSheet(
+            "font-weight:700;background-color:rgba(0,0,0,0);border:none;padding:1px 2px;"
+        )
+        self._summary = QLabel(metrics_html)
         self._summary.setObjectName(tag_obj)
         self._summary.setTextFormat(Qt.RichText)
         self._summary.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self._tag.setStyleSheet(
-            f"color:{wr_color};font-weight:700;"
-            f"background-color:rgba(0,0,0,0);border:none;padding:1px 2px;"
-        )
         # No solid color here — rich-text spans carry win-rate / overflow colors
         self._summary.setStyleSheet(
             "font-weight:700;background-color:rgba(0,0,0,0);border:none;"
@@ -144,10 +146,9 @@ class FormationCard(QFrame):
         self.btn_fold.setFixedSize(22, 22)
         self.btn_fold.clicked.connect(self._toggle_fold)
 
-        # Rank fixed; win-rate / summary left-aligned in the remaining stretch.
+        # Rank fixed; metrics stretch so fold button stays inside the window.
         head.addWidget(self._rank_l, 0, Qt.AlignLeft | Qt.AlignVCenter)
-        head.addWidget(self._mode_l, 0, Qt.AlignLeft | Qt.AlignVCenter)
-        head.addWidget(self._tag, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        head.addWidget(self._tag, 1, Qt.AlignLeft | Qt.AlignVCenter)
         head.addWidget(self._summary, 1, Qt.AlignLeft | Qt.AlignVCenter)
         head.addWidget(self.btn_fold, 0, Qt.AlignTop | Qt.AlignRight)
         self._root.addLayout(head)
@@ -204,7 +205,6 @@ class FormationCard(QFrame):
         collapsed = self._collapsed
         self._body.setVisible(not collapsed)
         self._tag.setVisible(not collapsed)
-        self._mode_l.setVisible(not collapsed)
         self._summary.setVisible(collapsed)
         self.btn_fold.setText("▸" if collapsed else "▾")
         self.btn_fold.setToolTip("展开" if collapsed else "折叠")
